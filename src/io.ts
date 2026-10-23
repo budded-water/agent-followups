@@ -5,6 +5,7 @@ import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path';
 import { Config, type Settings } from './contracts.js';
 
 export const MAX_JSON_BYTES = 2 * 1024 * 1024;
+export const jsonSize = (value: unknown) => Buffer.byteLength(JSON.stringify(value, null, 2) + '\n', 'utf8');
 function jsonText(value: unknown) {
   const text = JSON.stringify(value, null, 2) + '\n';
   if (Buffer.byteLength(text, 'utf8') > MAX_JSON_BYTES) throw new Error('JSON write exceeded read limit');

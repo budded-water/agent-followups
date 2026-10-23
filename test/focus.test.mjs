@@ -83,3 +83,22 @@ test('duplicate provenance crossing the read bound cannot replace a readable pro
  const n=Math.floor((MAX_JSON_BYTES-base-80)/unit);task.eventIds.push(...Array.from({length:n},(_,i)=>i.toString(16).padStart(64,'0')));const path=join(c.stateDir,'proposals',task.id+'.json');await atomicJson(path,task);const before=await readFile(path,'utf8');assert.ok(Buffer.byteLength(before)>MAX_JSON_BYTES-200);
  await record(c,'app',[{...evidence[0],source:'one-more'}]);assert.equal((await drain(c,1,output([{...candidate,focusIds:[]}])))[0].state,'failed');assert.equal(await readFile(path,'utf8'),before);assert.equal((await proposals(c))[0].id,task.id);
 });
+
+test('queued source revocation prevents provider calls while preserving original evidence',async t=>{
+ const {c}=await fixture(t);const id=await record(c,'app',evidence);const path=join(c.stateDir,'events',id+'.json');const original=await readFile(path,'utf8');c.projects=c.projects.filter(p=>p.id!=='app');let calls=0;
+ const result=await drain(c,1,async()=>{calls++;throw new Error('must not send revoked evidence');});assert.equal(result[0].state,'failed');assert.equal(calls,0);assert.equal(await readFile(path,'utf8'),original);assert.deepEqual(await proposals(c),[]);
+});
+test('large import descriptions use stdin rather than oversized process arguments',async t=>{
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);task.eventIds.push(...Array.from({length:3000},(_,i)=>i.toString(16).padStart(64,'0')));await atomicJson(join(c.stateDir,'proposals',task.id+'.json'),task);const {accept}=await import('../dist/workflow.js');
+ const done=await accept(c,task.id,async(b,a,o)=>{if(a[0]==='list')return '[]';assert.equal(a[a.indexOf('--body-file')+1],'-');assert.ok(Buffer.byteLength(o.input)>128*1024);assert.ok(a.every(v=>Buffer.byteLength(v)<32768));return '{"id":"imported-1"}';});assert.equal(done.status,'accepted');
+});
+test('near-limit legacy reconciliation preserves full provenance and publishes a writable receipt',async t=>{
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);const {MAX_JSON_BYTES,jsonSize}=await import('../dist/io.js');task.status='accepting';const unit=jsonSize({...task,eventIds:[...task.eventIds,'0'.repeat(64)]})-jsonSize(task);const n=Math.floor((MAX_JSON_BYTES-jsonSize(task)-80)/unit);task.eventIds.push(...Array.from({length:n},(_,i)=>i.toString(16).padStart(64,'0')));const path=join(c.stateDir,'proposals',task.id+'.json');await atomicJson(path,task);const before=JSON.parse(await readFile(path,'utf8'));const {reconcile,accept}=await import('../dist/workflow.js');
+ const result=await reconcile(c,task.id,'existing-1',async()=>JSON.stringify([{id:'existing-1',description:`agent-followups:${task.id}`} ]));assert.equal(result.status,'accepted');assert.ok(result.provenanceArchive);assert.deepEqual(JSON.parse(await readFile(join(c.stateDir,'provenance-archives',task.id+'-'+result.provenanceArchive+'.json'),'utf8')),before);assert.equal((await proposals(c))[0].beadId,'existing-1');
+ await accept(c,task.id,async()=>{throw new Error('must not create again');});
+});
+
+test('transport and reconciliation identity bounds reject before intent or external calls',async t=>{
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);const path=join(c.stateDir,'proposals',task.id+'.json');task.parentBeads=Array.from({length:1000},(_,i)=>'parent-'+i.toString(16).padStart(64,'0'));await atomicJson(path,task);const {accept,reconcile}=await import('../dist/workflow.js');let calls=0;const fake=async()=>{calls++;throw new Error('must not call');};
+ await assert.rejects(accept(c,task.id,fake),/transport budget/);assert.equal((await proposals(c))[0].status,'proposed');await assert.rejects(reconcile(c,task.id,'x'.repeat(513),fake));assert.equal(calls,0);
+});

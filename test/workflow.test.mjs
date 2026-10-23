@@ -85,7 +85,7 @@ test('Beads import records an intent, carries acceptance, and does not repeat su
     assert.equal(options.env.BEADS_DIR, c.beadsDir);
     if (args[0] === 'list') return '[]';
     assert.equal(args[0], 'create'); writes++; assert.ok(args.includes('--acceptance'));
-    assert.ok(args[args.indexOf('--description') + 1].includes(`agent-followups:${task.id}`));
+    assert.ok(options.input.includes(`agent-followups:${task.id}`)); assert.ok(args.includes('--body-file'));
     assert.equal((await proposals(c))[0].status, 'accepting'); return '{"id":"plan-123"}';
   };
   const done = await accept(c, task.id, bd); assert.equal(done.beadId, 'plan-123');

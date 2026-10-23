@@ -1,8 +1,8 @@
-import { readdir, rm } from 'node:fs/promises';
+import { readdir, rm, link } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { Candidate, Event, Extraction, HookInput, Task, type Settings, type WorkEvent, type Finding } from './contracts.js';
-import { hash, privateDir, atomicJson, createJson, readJson, exists, projectAt, withLock, command, type Command } from './io.js';
+import { hash, jsonSize, MAX_JSON_BYTES, privateDir, atomicJson, createJson, readJson, exists, projectAt, withLock, command, type Command } from './io.js';
 
 import { activeFocus, focusContext, validateMatches, type Focus } from './focus.js';
 
@@ -173,6 +173,7 @@ export async function drain(c: Settings, limit = 1, exec: Command = command, sig
       try {
         event = Event.parse(await readJson(join(c.stateDir, 'events', file)));
         if (event.id !== id) throw new Error('Event ID mismatch');
+        if (!c.projects.some(p => p.id === event.project)) throw new Error('Source project is no longer configured');
       } catch {
         await atomicJson(receipt, { state: 'failed', error: 'Event could not be read or validated. Preserve the original input, resolve the cause, then explicitly retry.', finishedAt: now() });
         result.push({ id, state: 'failed' });
@@ -211,20 +212,35 @@ export function beadDescription(task: z.infer<typeof Task>) {
   const f = task.candidate;
   return [`agent-followups:${task.id}`, `Project: ${f.project}`, `Certainty: ${f.certainty}`, '', '## Evidence',
     ...f.evidence.map(e => `- ${e.source}: ${e.summary}`), '', '## Value', f.rationale, '', '## Next step', f.nextStep,
-    '', '## Source events', ...task.eventIds, '', '## Focus provenance', ...task.focusRuns.map(r => `${r.revision}: ${r.matchedIds.join(', ') || '(unmatched)'}; event ${r.eventId}`), '', '## Discovery parents', ...task.parentBeads,
+    '', '## Source events', ...task.eventIds, '', '## Archived provenance', ...(task.provenanceArchive ? [`Private provenance-archives/${task.id}-${task.provenanceArchive}.json; historical snapshot, not current task status.`] : []), '', '## Focus provenance', ...task.focusRuns.map(r => `${r.revision}: ${r.matchedIds.join(', ') || '(unmatched)'}; event ${r.eventId}`), '', '## Discovery parents', ...task.parentBeads,
     '', 'Proposal acceptance does not authorize implementation, merge, publication or declare UI/release acceptance.'].join('\n');
 }
-async function beadsCommand(c: Settings, args: string[], exec: Command) {
+async function beadsCommand(c: Settings, args: string[], exec: Command, input?: string) {
   const env: NodeJS.ProcessEnv = { ...process.env, BEADS_DIR: c.beadsDir };
   delete env.BEADS_DB; delete env.BD_DB;
-  return exec(c.beadsBinary, [...args, '--sandbox'], { cwd: c.beadsDir, env, timeoutMs: c.timeoutSeconds * 1000 });
+  return exec(c.beadsBinary, [...args, '--sandbox'], { cwd: c.beadsDir, env, input, timeoutMs: c.timeoutSeconds * 1000 });
+}
+const BeadId = z.string().regex(/^[a-zA-Z0-9_.-]+$/).min(1).max(512);
+async function importHeadroom(c: Settings, id: string, task: z.infer<typeof Task>) {
+  if (jsonSize({ ...task, status: 'accepted', beadId: 'x'.repeat(512) }) <= MAX_JSON_BYTES && Buffer.byteLength(beadDescription(task)) <= MAX_JSON_BYTES / 2) return task;
+  // Retain the exact readable source inode before compacting only provenance arrays.
+  const source = taskPath(c, id); const original = await readJson(source); const revision = hash(original);
+  const directory = join(c.stateDir, 'provenance-archives'); await privateDir(directory);
+  const archive = join(directory, `${id}-${revision}.json`);
+  try { await link(source, archive); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
+  if (hash(await readJson(archive)) !== revision) throw new Error('Provenance archive mismatch');
+  return { ...task, eventIds: [], parentBeads: [], focusRuns: [], provenanceArchive: revision };
 }
 export async function accept(c: Settings, id: string, exec: Command = command) {
   return withLock(c, async () => {
-    const path = taskPath(c, id); const task = await readTask(c, id);
+    const path = taskPath(c, id); let task = await readTask(c, id);
     if (task.status === 'accepted') return task;
     if (task.status !== 'proposed') throw new Error('Proposal cannot be accepted: reconcile an interrupted write or use another proposed task');
     if (!c.projects.some(p => p.id === task.candidate.project)) throw new Error('Proposal target is no longer configured');
+    const createArgs = ['create', '--title', task.candidate.title, '--type', task.candidate.kind === 'bug' ? 'bug' : 'task',
+      '--priority', '2', '--labels', `project:${task.candidate.project}`, '--body-file', '-', '--acceptance', task.candidate.acceptance,
+      ...(task.parentBeads.length ? ['--deps', task.parentBeads.map(p => `discovered-from:${p}`).join(',')] : []), '--json'];
+    if (createArgs.some(a => Buffer.byteLength(a) > 32768) || createArgs.reduce((n, a) => n + Buffer.byteLength(a) + 1, 0) > 65536) throw new Error('Import arguments exceed transport budget');
     const existing = z.array(z.object({ id: z.string(), title: z.string(), description: z.string().optional(), labels: z.array(z.string()).optional() })).parse(JSON.parse(await beadsCommand(c, ['list', '--all', '--limit', '0', '--json'], exec)));
     if (existing.some(b => {
       if (b.description?.includes(`agent-followups:${id}`)) return true;
@@ -237,29 +253,28 @@ export async function accept(c: Settings, id: string, exec: Command = command) {
     // Check discovery parents before mutation; they must be in this configured Beads store.
     for (const parent of task.parentBeads) await beadsCommand(c, ['show', parent, '--json'], exec);
     // Persist intent before the external mutation. Unknown outcomes never auto-retry.
+    task = await importHeadroom(c, id, task);
     task.status = 'accepting'; await atomicJson(path, task);
-    const raw = await beadsCommand(c, ['create', '--title', task.candidate.title, '--type', task.candidate.kind === 'bug' ? 'bug' : 'task',
-      '--priority', '2', '--labels', `project:${task.candidate.project}`, '--description', beadDescription(task), '--acceptance', task.candidate.acceptance,
-      ...(task.parentBeads.length ? ['--deps', task.parentBeads.map(p => `discovered-from:${p}`).join(',')] : []), '--json'], exec);
-    const created = z.object({ id: z.string().min(1) }).parse(JSON.parse(raw));
+    const raw = await beadsCommand(c, createArgs, exec, beadDescription(task));
+    const created = z.object({ id: BeadId }).parse(JSON.parse(raw));
     task.status = 'accepted'; task.beadId = created.id; await atomicJson(path, task); return task;
   });
 }
 export async function reconcile(c: Settings, id: string, bead: string, exec: Command = command) {
-  if (!/^[a-zA-Z0-9_.-]+$/.test(bead)) throw new Error('Invalid Beads ID');
+  BeadId.parse(bead);
   return withLock(c, async () => {
-    const path = taskPath(c, id); const task = await readTask(c, id);
+    const path = taskPath(c, id); let task = await readTask(c, id);
     if (task.status !== 'accepting') throw new Error('Only an interrupted acceptance can be reconciled');
     const raw: unknown = JSON.parse(await beadsCommand(c, ['show', bead, '--json'], exec));
     const value = z.object({ id: z.string(), description: z.string() }).parse(Array.isArray(raw) ? raw[0] : raw);
     if (value.id !== bead || !value.description.includes(`agent-followups:${id}`)) throw new Error('Bead identity does not match the recorded acceptance intent');
-    task.status = 'accepted'; task.beadId = bead; await atomicJson(path, task); return task;
+    task.status = 'accepted'; task.beadId = bead; task = await importHeadroom(c, id, task); await atomicJson(path, task); return task;
   });
 }
 export async function reject(c: Settings, id: string, reason: string) {
   if (!reason.trim()) throw new Error('A rejection reason is required');
   return withLock(c, async () => {
-    const path = taskPath(c, id); const task = await readTask(c, id);
+    const path = taskPath(c, id); let task = await readTask(c, id);
     if (task.status !== 'proposed') throw new Error('Only proposed tasks can be rejected');
     task.status = 'rejected'; task.reason = reason; await atomicJson(path, task); return task;
   });

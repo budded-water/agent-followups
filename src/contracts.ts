@@ -65,6 +65,7 @@ export const Task = z.object({
   candidate: Candidate,
   eventIds: z.array(z.string()),
   parentBeads: z.array(z.string()),
+  provenanceArchive: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   focusRuns: z.array(z.object({ eventId: z.string(), revision: z.string().regex(/^[a-f0-9]{64}$/), matchedIds: z.array(FocusId).max(8) }).strict()).default([]),
   status: z.enum(['proposed', 'accepting', 'accepted', 'rejected']),
   createdAt: z.string(),
