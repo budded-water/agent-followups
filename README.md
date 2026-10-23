@@ -126,7 +126,7 @@ Acceptance creates a task with evidence, acceptance criteria, next step, project
 
 - One exclusive state lock serializes drain and proposal decisions. It is never stolen or expired automatically. Hooks can keep enqueueing while analysis runs.
 - If a process crashes holding `operation.lock`, first verify the worker and its child processes have stopped; then remove only that lock. Do not clear a live lock.
-- Extraction writes a running receipt first. Failed/interrupted checks are not retried automatically. After resolving the cause, use `retry --id EVENT_ID --reason "..."`. Recovery preserves the previous receipt.
+- Extraction writes a running receipt first. Failed/interrupted checks are not retried automatically. After resolving the cause, use `retry --id EVENT_ID --reason "..."`. Recovery preserves the previous receipt. An unreadable, invalid or ID-mismatched event gets a failed receipt and consumes one drain slot; independent events can still run. Its original bytes are preserved. Before retrying it, preserve a backup and restore valid original evidence or fix access permissions; do not invent replacement evidence or reset the queue.
 - Beads creation persists an `accepting` intent before the write. A timeout, invalid reply or crash may leave a task created with no local acknowledgement. Do not repeat creation. Search Beads for `agent-followups:PROPOSAL_ID`, then use `reconcile --id PROPOSAL_ID --bead EXISTING_BEAD_ID`; the CLI verifies the marker before attaching it. If no task exists, manual investigation/recovery is required; there is deliberately no blind reset.
 - Evidence, model output and event receipts live under private state. Raw subprocess stderr is not copied into public errors. The Codex provider receives supplied evidence during `drain`; private local storage does not make model processing offline.
 - Keep the whole state directory and the Beads database backed up separately. No automatic retention, remote backup or installation-wide resource manager is included.
@@ -138,3 +138,13 @@ Acceptance creates a task with evidence, acceptance criteria, next step, project
 ## License
 
 MIT. Beads, Codex and other invoked tools retain their own licenses and terms. No upstream source is vendored.
+
+## Looking up imported work
+
+Beads owns task status after import. Select the same external `beadsDir` used by this config, rather than running plain `bd` from a business checkout. Use a verified store-aware wrapper when installed; the local pilot provides `followups-beads ready --json` and `followups-beads show ID --json`. For a manual POSIX invocation, substitute the configured absolute paths:
+
+```sh
+(cd /absolute/private/planning/.beads && env -u BEADS_DB -u BD_DB BEADS_DIR=/absolute/private/planning/.beads /absolute/path/to/bd ready --json --sandbox)
+```
+
+Use `show ID` in place of `ready` to inspect a selected task. Clear inherited database overrides each time; do not export a global Beads directory that silently changes other projects. A ready task remains subject to the selected repository's execution authorization.

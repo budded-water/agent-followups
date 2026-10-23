@@ -229,3 +229,36 @@ test('status reports unresolved import intents and accepted provenance without q
   await writeFile(join(c.stateDir, 'proposals', `${'f'.repeat(64)}.json`), '{}');
   assert.equal((await status(c)).proposals.invalid, 1);
 });
+
+test('a corrupt event is preserved and reported while independent queued work still runs', async t => {
+  const { c } = await fixture(t);
+  const id = '0'.repeat(64);
+  await atomicJson(join(c.stateDir, 'events', `${id}.json`), {});
+  await writeFile(join(c.stateDir, 'events', `${id}.json`), '{private-corrupt-bytes');
+  const valid = await record(c, 'app', evidence);
+  const r = await drain(c, 20, extractor({ outcome: 'no_findings', candidates: [] }));
+  assert.equal(r.find(e => e.id === id).state, 'failed');
+  assert.equal(r.find(e => e.id === valid).state, 'succeeded');
+  assert.equal(await readFile(join(c.stateDir, 'events', `${id}.json`), 'utf8'), '{private-corrupt-bytes');
+  assert.ok(!JSON.stringify(r).includes('private-corrupt'));
+  assert.deepEqual(await drain(c, 20, extractor()), []);
+  await withLock(c, async () => {});
+  await retry(c, id, 'Operator restored original evidence after keeping a backup');
+  const original = JSON.parse(await readFile(join(c.stateDir, 'events', `${valid}.json`), 'utf8'));
+  await atomicJson(join(c.stateDir, 'events', `${id}.json`), { ...original, id });
+  assert.equal((await drain(c, 1, extractor({ outcome: 'no_findings', candidates: [] })))[0].state, 'succeeded');
+});
+
+test('a running receipt survives drain until explicit recovery archives it and reprocesses once', async t => {
+  const { c } = await fixture(t);
+  const id = await record(c, 'app', evidence);
+  const receipt = { state: 'running', eventId: id, startedAt: '2026-01-01T00:00:00.000Z' };
+  await atomicJson(join(c.stateDir, 'checks', `${id}.json`), receipt);
+  assert.deepEqual(await drain(c, 1, () => { throw new Error('must skip running'); }), []);
+  await retry(c, id, 'Verified crashed worker and children are stopped');
+  const { readdir } = await import('node:fs/promises');
+  const [file] = await readdir(join(c.stateDir, 'recovery'));
+  assert.deepEqual(JSON.parse(await readFile(join(c.stateDir, 'recovery', file), 'utf8')).previous, receipt);
+  assert.equal((await drain(c, 1, extractor()))[0].state, 'succeeded');
+  assert.deepEqual(await drain(c, 1, extractor()), []);
+});

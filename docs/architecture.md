@@ -6,7 +6,7 @@ The reusable unit is evidence-backed follow-up discovery. Keep it independent fr
 
 ## State transitions
 
-Events are content-addressed immutable inputs. Checks transition from absent to running to succeeded or failed. A crash can retain running; an explicit retry archives that receipt and makes the event eligible again. A successful no-findings result is a completed check.
+Events are content-addressed immutable inputs. Checks transition from absent to running to succeeded or failed. A crash can retain running; an explicit retry archives that receipt and makes the event eligible again. A successful no-findings result is a completed check. Unreadable, invalid or ID-mismatched events receive a failure receipt without changing their original bytes; they consume a drain slot but do not abort unrelated queued work. They require operator repair of the original evidence/access plus explicit retry.
 
 Proposals transition from proposed to rejected or accepting to accepted. The accepting state is written before a Beads create call. An unknown write outcome remains accepting and requires a matching existing Beads task to reconcile. A successful import never repeats creation. Subsequent duplicate observations add provenance without overwriting the original decision or reviewed proposal.
 

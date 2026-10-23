@@ -149,9 +149,18 @@ export async function drain(c: Settings, limit = 1, exec: Command = command) {
     const result = [];
     for (const file of await records(c, 'events')) {
       if (result.length >= limit || process.exitCode === 130 || process.exitCode === 143) break;
-      const event = Event.parse(await readJson(join(c.stateDir, 'events', file)));
-      const receipt = join(c.stateDir, 'checks', `${event.id}.json`);
+      const id = file.slice(0, -5);
+      const receipt = join(c.stateDir, 'checks', file);
       if (await exists(receipt)) continue;
+      let event: WorkEvent;
+      try {
+        event = Event.parse(await readJson(join(c.stateDir, 'events', file)));
+        if (event.id !== id) throw new Error('Event ID mismatch');
+      } catch {
+        await atomicJson(receipt, { state: 'failed', error: 'Event could not be read or validated. Preserve the original input, resolve the cause, then explicitly retry.', finishedAt: now() });
+        result.push({ id, state: 'failed' });
+        continue;
+      }
       await atomicJson(receipt, { state: 'running', eventId: event.id, startedAt: now() });
       try {
         const r = event.evidence.length ? await extract(c, event, exec) : { outcome: 'no_findings' as const, candidates: [] };
