@@ -265,6 +265,6 @@ export function hookConfig(configPath: string, cliPath: string) {
   const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
   const command = `${quote(process.execPath)} ${quote(resolve(cliPath))} hook --config ${quote(resolve(configPath))}`;
   return { hooks: Object.fromEntries(['SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt', 'SessionEnd'].map(event => [event,
-    [{ hooks: [{ type: 'command', command, timeout: 3 }] }],
+    [{ hooks: [{ type: 'command', command, timeout: 3, ...(event === 'SessionStart' ? { additionalContextLimit: 16000 } : {}) }] }],
   ])) };
 }
