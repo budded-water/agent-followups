@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "directions": [
+    {
+      "id": "verification-evidence",
+      "status": "active",
+      "layer": "general",
+      "projects": [],
+      "question": "Where do reusable verification contracts or evidence claims diverge?",
+      "lookFor": [
+        "Static success presented as runtime acceptance",
+        "Missing links between source, artifacts and evidence"
+      ],
+      "evidenceRequired": [
+        "A concrete claim and its supporting or conflicting record"
+      ],
+      "exclude": [
+        "Required checks for the current task stay in the current task"
+      ],
+      "exitWhen": "Keep active unless the operator explicitly pauses this general direction."
+    },
+    {
+      "id": "repeated-work",
+      "status": "active",
+      "layer": "general",
+      "projects": [],
+      "question": "Which independent repeated manual operations are worth automating?",
+      "lookFor": [
+        "Repeated commands or handoffs",
+        "Repeated preparation that could be reused"
+      ],
+      "evidenceRequired": [
+        "Observed repeated operations and their context"
+      ],
+      "exclude": [
+        "Generic automation ideas without an observed repetition"
+      ],
+      "exitWhen": "Keep active unless the operator explicitly pauses this general direction."
+    },
+    {
+      "id": "recovery-contracts",
+      "status": "active",
+      "layer": "general",
+      "projects": [],
+      "question": "Which recurring recovery or cross-project contract failures deserve independent work?",
+      "lookFor": [
+        "Uncertain writes and duplicate retries",
+        "Conflicting canonical definitions or unhandled recovery paths"
+      ],
+      "evidenceRequired": [
+        "A concrete failure or conflicting source pair"
+      ],
+      "exclude": [
+        "Main-task required corrections must be finished now"
+      ],
+      "exitWhen": "Keep active unless the operator explicitly pauses this general direction."
+    },
+    {
+      "id": "ui-eval-speed",
+      "status": "active",
+      "layer": "targeted",
+      "projects": [
+        "ui-eval",
+        "go-global-app"
+      ],
+      "question": "Which UI-eval stages contain avoidable waiting or repeated setup?",
+      "lookFor": [
+        "Build, install and launch durations",
+        "Repeated artifact generation or environment preparation"
+      ],
+      "evidenceRequired": [
+        "A run record with measured stage timing or repeated-operation trace"
+      ],
+      "exclude": [
+        "Performance claims without measurement"
+      ],
+      "exitWhen": "After a recorded baseline, agreed target and representative verification show the bottleneck resolved, review for explicit pause."
+    },
+    {
+      "id": "ui-eval-efficiency",
+      "status": "active",
+      "layer": "targeted",
+      "projects": [
+        "ui-eval",
+        "go-global-app"
+      ],
+      "question": "Does UI-eval spend work on unrelated scenarios or repeated human intervention?",
+      "lookFor": [
+        "Scenario scope versus affected features",
+        "Manual intervention and retry causes"
+      ],
+      "evidenceRequired": [
+        "A scenario selection or intervention record with affected scope"
+      ],
+      "exclude": [
+        "Removing necessary acceptance coverage merely to run faster"
+      ],
+      "exitWhen": "After representative runs meet agreed coverage and intervention goals, review for explicit pause."
+    },
+    {
+      "id": "ui-eval-accuracy",
+      "status": "active",
+      "layer": "targeted",
+      "projects": [
+        "ui-eval",
+        "go-global-app"
+      ],
+      "question": "Where do UI-eval results disagree with independently observed behavior?",
+      "lookFor": [
+        "False positives, missed defects and flaky results",
+        "Claims stronger than actual evidence"
+      ],
+      "evidenceRequired": [
+        "A concrete automated result and independent counterexample or replay evidence"
+      ],
+      "exclude": [
+        "Unverified claims that a run is a false positive or false negative"
+      ],
+      "exitWhen": "After recorded counterexamples are resolved and a representative labeled sample meets agreed criteria, review for explicit pause."
+    }
+  ]
+}
