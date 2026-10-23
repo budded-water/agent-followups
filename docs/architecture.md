@@ -22,7 +22,7 @@ UI-eval owns scenario execution, verification plans and evidence reconciliation.
 
 ## Deduplication
 
-Event IDs hash sanitized input. Proposal IDs hash normalized title and target project. The latter intentionally avoids an additional model call: it is deterministic but misses differently worded duplicates. Acceptance inspects same-project Beads titles and global import markers; unscoped matching titles require manual duplicate review; independent external writers can race this preflight. One runner/state store per planning workflow is the supported deployment. The local `similar` command now provides bounded lexical/evidence-source suggestions, and operators can record duplicate associations. It does not merge candidates or provide general semantic equivalence. [Proposal review](proposal-review.md) owns the review schema, invalidation and import gate.
+Event IDs hash sanitized input. Proposal IDs hash normalized title and target project. The latter intentionally avoids an additional model call: it is deterministic but misses differently worded duplicates. Acceptance inspects same-project Beads titles and global exact leading-line import markers (body quotations do not establish ownership); unscoped matching titles require manual duplicate review; independent external writers can race this preflight. One runner/state store per planning workflow is the supported deployment. The local `similar` command now provides bounded lexical/evidence-source suggestions, and operators can record duplicate associations. It does not merge candidates or provide general semantic equivalence. [Proposal review](proposal-review.md) owns the review schema, invalidation and import gate.
 
 ## Queue visibility
 

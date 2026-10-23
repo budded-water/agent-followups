@@ -263,3 +263,13 @@ test('a running receipt survives drain until explicit recovery archives it and r
   assert.equal((await drain(c, 1, extractor()))[0].state, 'succeeded');
   assert.deepEqual(await drain(c, 1, extractor()), []);
 });
+
+test('quoted markers do not claim import ownership during preflight or unknown-write reconciliation', async t => {
+ const {c,task}=await propose(t);
+ await assert.rejects(accept(c,task.id,async(b,a)=>{if(a[0]==='list')return JSON.stringify([{id:'other',title:'An unrelated issue',description:`agent-followups:${'f'.repeat(64)}\nEvidence quotes agent-followups:${task.id}`}]);throw new Error('unknown create');}),/unknown create/);
+ assert.equal((await proposals(c))[0].status,'accepting');
+ for(const description of [`Different task\nagent-followups:${task.id}`,`agent-followups:${task.id}-suffix`,`agent-followups:${'f'.repeat(64)}\nReferenced marker: agent-followups:${task.id}`]) {
+  await assert.rejects(reconcile(c,task.id,'other',async()=>JSON.stringify([{id:'other',description}])),/identity does not match/);assert.equal((await proposals(c))[0].status,'accepting');
+ }
+ const accepted=await reconcile(c,task.id,'owned',async()=>JSON.stringify([{id:'owned',description:`agent-followups:${task.id}\r\nProject: app`} ]));assert.equal(accepted.beadId,'owned');
+});

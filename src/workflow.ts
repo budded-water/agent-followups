@@ -214,6 +214,8 @@ export async function retry(c: Settings, id: string, reason: string) {
 export async function proposals(c: Settings) {
   return Promise.all((await records(c, 'proposals')).map(file => readJson(join(c.stateDir, 'proposals', file)).then(v => Task.parse(v))));
 }
+// Generated descriptions have always owned the exact first line. Body citations are untrusted.
+function importIdentity(description: string | undefined, id: string) { return description?.split(/\r?\n/, 1)[0] === `agent-followups:${id}`; }
 export function beadDescription(task: z.infer<typeof Task>) {
   const f = task.candidate;
   return [`agent-followups:${task.id}`, `Project: ${f.project}`, `Certainty: ${f.certainty}`, `Import review: ${task.importReview ?? 'not imported'}`, '', '## Evidence',
@@ -250,7 +252,7 @@ export async function accept(c: Settings, id: string, exec: Command = command) {
     if (createArgs.some(a => Buffer.byteLength(a) > 32768) || createArgs.reduce((n, a) => n + Buffer.byteLength(a) + 1, 0) > 65536) throw new Error('Import arguments exceed transport budget');
     const existing = z.array(z.object({ id: z.string(), title: z.string(), description: z.string().optional(), labels: z.array(z.string()).optional() })).parse(JSON.parse(await beadsCommand(c, ['list', '--all', '--limit', '0', '--json'], exec)));
     if (existing.some(b => {
-      if (b.description?.includes(`agent-followups:${id}`)) return true;
+      if (importIdentity(b.description, id)) return true;
       const project = b.labels?.find(label => label.startsWith('project:'))?.slice(8)
         ?? b.description?.match(/^Project: ([a-zA-Z0-9_-]+)$/m)?.[1];
       // Unscoped legacy issues remain a conservative manual duplicate check.
@@ -274,7 +276,7 @@ export async function reconcile(c: Settings, id: string, bead: string, exec: Com
     if (task.status !== 'accepting') throw new Error('Only an interrupted acceptance can be reconciled');
     const raw: unknown = JSON.parse(await beadsCommand(c, ['show', bead, '--json'], exec));
     const value = z.object({ id: z.string(), description: z.string() }).parse(Array.isArray(raw) ? raw[0] : raw);
-    if (value.id !== bead || !value.description.includes(`agent-followups:${id}`)) throw new Error('Bead identity does not match the recorded acceptance intent');
+    if (value.id !== bead || !importIdentity(value.description, id)) throw new Error('Bead identity does not match the recorded acceptance intent');
     task.status = 'accepted'; task.beadId = bead; task = await importHeadroom(c, id, task); await atomicJson(path, task); return task;
   });
 }
