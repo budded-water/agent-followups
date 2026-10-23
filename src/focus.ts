@@ -28,14 +28,22 @@ export async function readFocus(c: Settings, revision?: string) {
   if (revision && !/^[a-f0-9]{64}$/.test(revision)) throw new Error('Invalid focus revision');
   const path = revision ? join(c.stateDir, 'focus-history', `${revision}.json`) : join(c.stateDir, 'focus.json');
   const input = await exists(path) ? await readJson(path) : (!revision || revision === hash(empty) ? empty : await readJson(path));
-  const doc = revision ? FocusDocument.parse(input) : validate(c, input);
+  const doc = FocusDocument.parse(input);
   if (revision && hash(doc) !== revision) throw new Error('Focus history hash mismatch');
   return { ...doc, revision: hash(doc) };
 }
 export async function activeFocus(c: Settings, project?: string): Promise<Focus> {
   if (project && !c.projects.some(p => p.id === project)) throw new Error('Unknown focus project');
   const doc = await readFocus(c);
-  return { revision: doc.revision, directions: doc.directions.filter(d => d.status === 'active' && (!project || !d.projects.length || d.projects.includes(project))) };
+  const allowed = new Set(c.projects.map(p => p.id));
+  const directions = doc.directions.flatMap(d => {
+    if (d.status !== 'active') return [];
+    const projects = d.projects.filter(id => allowed.has(id));
+    if (d.projects.length && !projects.length) return [];
+    if (project && projects.length && !projects.includes(project)) return [];
+    return [{ ...d, projects }];
+  });
+  return { revision: doc.revision, directions };
 }
 async function save(c: Settings, input: unknown) {
   const doc = validate(c, input); const revision = hash(doc);

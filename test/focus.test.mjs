@@ -102,3 +102,29 @@ test('transport and reconciliation identity bounds reject before intent or exter
  const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);const path=join(c.stateDir,'proposals',task.id+'.json');task.parentBeads=Array.from({length:1000},(_,i)=>'parent-'+i.toString(16).padStart(64,'0'));await atomicJson(path,task);const {accept,reconcile}=await import('../dist/workflow.js');let calls=0;const fake=async()=>{calls++;throw new Error('must not call');};
  await assert.rejects(accept(c,task.id,fake),/transport budget/);assert.equal((await proposals(c))[0].status,'proposed');await assert.rejects(reconcile(c,task.id,'x'.repeat(513),fake));assert.equal(calls,0);
 });
+
+test('removed project scopes do not poison remaining startup or extraction; history stays readable',async t=>{
+ const {c,other}=await fixture(t);const dirs=[{...direction,id:'app-only'}, {...direction,id:'shared',projects:['app','other']}, {...direction,id:'paused-app',status:'paused'}, {...direction,id:'archived-app',status:'archived'}, {...direction,id:'general',layer:'general',projects:[]}];const first=await setFocus(c,{version:1,directions:dirs});c.projects=c.projects.filter(p=>p.id==='other');
+ assert.equal((await readFocus(c)).directions.length,5);assert.equal((await readFocus(c,first.revision)).directions[0].projects[0],'app');const active=await activeFocus(c,'other');assert.deepEqual(active.directions.map(d=>d.id),['shared','general']);assert.deepEqual(active.directions[0].projects,['other']);
+ const ctx=await hook(c,{hook_event_name:'SessionStart',session_id:'remaining',cwd:other});assert.ok(!ctx.hookSpecificOutput.additionalContext.includes('app-only'));
+ await record(c,'other',evidence);const result=await drain(c,1,async(b,a,o)=>{assert.ok(!o.input.includes('paused-app'));assert.ok(!o.input.includes('app-only'));return output([])(b,a,o);});assert.equal(result[0].state,'succeeded');await assert.rejects(setFocus(c,{version:1,directions:dirs}));
+});
+test('a later invalid replacement cannot publish earlier valid candidates in a batch',async t=>{
+ for(const mode of ['identity','size']) {
+  const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);const path=join(c.stateDir,'proposals',task.id+'.json');
+  if(mode==='identity')task.id='f'.repeat(64);else {const {MAX_JSON_BYTES,jsonSize}=await import('../dist/io.js');const unit=jsonSize({...task,eventIds:[...task.eventIds,'0'.repeat(64)]})-jsonSize(task);const n=Math.floor((MAX_JSON_BYTES-jsonSize(task)-80)/unit);task.eventIds.push(...Array.from({length:n},(_,i)=>i.toString(16).padStart(64,'0')));}
+  await atomicJson(path,task);const before=await readFile(path,'utf8');await record(c,'app',[{...evidence[0],source:'batch'}]);const r=await drain(c,1,output([{...candidate,title:'Fresh independent follow-up',focusIds:[]},{...candidate,focusIds:[]}]));assert.equal(r[0].state,'failed');assert.equal(await readFile(path,'utf8'),before);assert.equal((await proposals(c)).length,1);
+ }
+});
+
+test('compacted unknown imports retain native parents and chained provenance through recovery',async t=>{
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [initial]=await proposals(c);const {MAX_JSON_BYTES,jsonSize}=await import('../dist/io.js');const {accept,reconcile}=await import('../dist/workflow.js');const path=join(c.stateDir,'proposals',initial.id+'.json');
+ const fill=task=>{const unit=jsonSize({...task,eventIds:[...task.eventIds,'0'.repeat(64)]})-jsonSize(task);const n=Math.floor((MAX_JSON_BYTES-jsonSize(task)-80)/unit);task.eventIds.push(...Array.from({length:n},(_,i)=>i.toString(16).padStart(64,'0')));return task;};
+ await atomicJson(path,fill({...initial,parentBeads:['parent-A']}));const original=await readFile(path,'utf8');let creates=0;
+ await assert.rejects(accept(c,initial.id,async(b,a,o)=>{if(a[0]==='list')return '[]';if(a[0]==='show')return '[{"id":"parent-A"}]';creates++;assert.equal(a[a.indexOf('--deps')+1],'discovered-from:parent-A');assert.ok(o.input.includes('provenance-archives'));throw new Error('unknown external outcome');}));
+ const [intent]=await proposals(c);assert.equal(intent.status,'accepting');const archive1=intent.provenanceArchive;assert.ok(archive1);assert.equal(await readFile(join(c.stateDir,'provenance-archives',initial.id+'-'+archive1+'.json'),'utf8'),original);
+ const show=async()=>JSON.stringify([{id:'existing-1',description:`agent-followups:${initial.id}`}]);await reconcile(c,initial.id,'existing-1',show);await record(c,'app',[{...evidence[0],source:'after-import'}]);await drain(c,1,output([{...candidate,focusIds:[]}]));const [updated]=await proposals(c);assert.equal(updated.status,'accepted');assert.equal(updated.focusRuns.length,1);
+ // Model a restored legacy intent after a later backup rollback.
+ updated.status='accepting';await atomicJson(path,fill(updated));const second=await reconcile(c,initial.id,'existing-1',show);assert.notEqual(second.provenanceArchive,archive1);const archived=JSON.parse(await readFile(join(c.stateDir,'provenance-archives',initial.id+'-'+second.provenanceArchive+'.json'),'utf8'));assert.equal(archived.provenanceArchive,archive1);assert.equal(archived.focusRuns.length,1);
+ await accept(c,initial.id,async()=>{creates++;throw new Error('no repeat');});assert.equal(creates,1);
+});

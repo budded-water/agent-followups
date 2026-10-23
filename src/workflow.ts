@@ -107,22 +107,25 @@ function candidateId(f: Finding) {
 }
 async function saveCandidates(c: Settings, event: WorkEvent, findings: Finding[], focus?: Focus) {
   const ids: string[] = [];
+  const staged = new Map<string, z.infer<typeof Task>>();
   for (const f of findings) {
     if (!c.projects.some(p => p.id === f.project)) throw new Error(`Unknown candidate project: ${f.project}`);
   }
   for (const f of findings) {
     const focusRun = focus ? [{ eventId: event.id, revision: focus.revision, matchedIds: f.focusIds ?? [] }] : [];
     const id = candidateId(f); const path = taskPath(c, id);
-    if (await exists(path)) {
-      const previous = await readTask(c, id);
+    if (staged.has(id) || await exists(path)) {
+      const previous = staged.get(id) ?? await readTask(c, id);
       previous.eventIds = [...new Set([...previous.eventIds, event.id])];
       previous.parentBeads = [...new Set([...previous.parentBeads, ...(event.parentBead ? [event.parentBead] : [])])];
       for (const run of focusRun) if (!previous.focusRuns.some(r => hash(r) === hash(run))) previous.focusRuns.push(run);
       // Preserve original reviewed content and state. Events retain further evidence.
-      await atomicJson(path, previous);
-    } else await atomicJson(path, Task.parse({ id, candidate: f, eventIds: [event.id], parentBeads: event.parentBead ? [event.parentBead] : [], focusRuns: focusRun, status: 'proposed', createdAt: now() }));
+      staged.set(id, previous);
+    } else staged.set(id, Task.parse({ id, candidate: f, eventIds: [event.id], parentBeads: event.parentBead ? [event.parentBead] : [], focusRuns: focusRun, status: 'proposed', createdAt: now() }));
     ids.push(id);
   }
+  for (const task of staged.values()) if (jsonSize(task) > MAX_JSON_BYTES) throw new Error('Proposal exceeds storage budget');
+  for (const [id, task] of staged) await atomicJson(taskPath(c, id), task);
   return ids;
 }
 export function extractionPrompt(c: Settings, event: WorkEvent, focus?: Focus) {
