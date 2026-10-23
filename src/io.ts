@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile, rename, link, lstat, realpath, open, rm } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { resolve, relative, isAbsolute, dirname, join } from 'node:path';
+import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path';
 import { Config, type Settings } from './contracts.js';
 
 export const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -37,6 +37,7 @@ export async function readJson(path: string) {
 export async function exists(path: string) {
   try { await lstat(path); return true; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e; }
 }
+const outside = (rel: string) => rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 export async function loadConfig(path: string): Promise<Settings> {
   const c = Config.parse(await readJson(path));
   c.projects = await Promise.all(c.projects.map(async p => ({ ...p, root: await realpath(p.root) })));
@@ -45,7 +46,7 @@ export async function loadConfig(path: string): Promise<Settings> {
   c.stateDir = await realpath(c.stateDir);
   for (const p of c.projects) {
     const rel = relative(p.root, resolve(c.stateDir));
-    if (!rel.startsWith('..') && !isAbsolute(rel)) throw new Error('State must live outside tracked project roots');
+    if (!outside(rel)) throw new Error('State must live outside tracked project roots');
   }
   return c;
 }
@@ -53,7 +54,7 @@ export async function projectAt(c: Settings, cwd: string) {
   const actual = await realpath(cwd);
   return c.projects.filter(p => {
     const rel = relative(p.root, actual);
-    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+    return !outside(rel);
   }).sort((a, b) => b.root.length - a.root.length)[0];
 }
 export async function withLock<T>(c: Settings, fn: () => Promise<T>): Promise<T> {
@@ -69,7 +70,8 @@ export type Command = (binary: string, args: string[], options: { cwd: string; i
 export const command: Command = (binary, args, options) => new Promise((done, fail) => {
   const child = spawn(binary, args, { cwd: options.cwd, env: options.env ?? process.env, shell: false,
     detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
-  let output = '', bytes = 0, failure: Error | undefined, force: NodeJS.Timeout | undefined;
+  const output: Buffer[] = [];
+  let bytes = 0, failure: Error | undefined, force: NodeJS.Timeout | undefined;
   const kill = (signal: NodeJS.Signals) => {
     if (!child.pid) return;
     try { if (process.platform !== 'win32') process.kill(-child.pid, signal); else child.kill(signal); } catch { /* already exited */ }
@@ -82,7 +84,7 @@ export const command: Command = (binary, args, options) => new Promise((done, fa
   const terminate = () => { process.exitCode = 143; stop('Command terminated'); };
   process.once('SIGINT', interrupt); process.once('SIGTERM', terminate);
   const timer = setTimeout(() => stop(`Command timed out: ${binary}`), options.timeoutMs ?? 120000);
-  child.stdout.on('data', chunk => { bytes += chunk.length; if (bytes > 2 * 1024 * 1024) stop('Command output exceeded limit'); else output += chunk.toString(); });
+  child.stdout.on('data', chunk => { bytes += chunk.length; if (bytes > 2 * 1024 * 1024) stop('Command output exceeded limit'); else output.push(Buffer.from(chunk)); });
   child.stderr.on('data', chunk => { bytes += chunk.length; if (bytes > 2 * 1024 * 1024) stop('Command output exceeded limit'); });
   child.on('error', e => { failure = e; });
   child.stdin.on('error', () => { /* close reports subprocess failure */ });
@@ -91,7 +93,7 @@ export const command: Command = (binary, args, options) => new Promise((done, fa
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate);
     clearTimeout(timer); if (force) clearTimeout(force); kill('SIGKILL');
     if (failure || code !== 0) fail(failure ?? new Error(`Command failed (${code}): ${binary}; inspect provider state before retrying writes`));
-    else done(output);
+    else done(Buffer.concat(output).toString('utf8'));
   });
 });
 export async function boundedInput(stream: NodeJS.ReadableStream, max = 1024 * 1024) {

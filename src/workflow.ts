@@ -140,22 +140,30 @@ export function beadDescription(task: z.infer<typeof Task>) {
     '', 'Proposal acceptance does not authorize implementation, merge, publication or declare UI/release acceptance.'].join('\n');
 }
 async function beadsCommand(c: Settings, args: string[], exec: Command) {
-  return exec(c.beadsBinary, args, { cwd: c.beadsDir, env: { ...process.env, BEADS_DIR: c.beadsDir }, timeoutMs: c.timeoutSeconds * 1000 });
+  const env: NodeJS.ProcessEnv = { ...process.env, BEADS_DIR: c.beadsDir };
+  delete env.BEADS_DB; delete env.BD_DB;
+  return exec(c.beadsBinary, [...args, '--sandbox'], { cwd: c.beadsDir, env, timeoutMs: c.timeoutSeconds * 1000 });
 }
 export async function accept(c: Settings, id: string, exec: Command = command) {
   return withLock(c, async () => {
     const path = taskPath(c, id); const task = Task.parse(await readJson(path));
     if (task.status === 'accepted') return task;
     if (task.status !== 'proposed') throw new Error('Proposal cannot be accepted: reconcile an interrupted write or use another proposed task');
-    const existing = z.array(z.object({ id: z.string(), title: z.string(), description: z.string().optional() })).parse(JSON.parse(await beadsCommand(c, ['list', '--all', '--limit', '0', '--json'], exec)));
-    if (existing.some(b => b.description?.includes(`agent-followups:${id}`) || candidateId({ ...task.candidate, title: b.title }) === id))
+    const existing = z.array(z.object({ id: z.string(), title: z.string(), description: z.string().optional(), labels: z.array(z.string()).optional() })).parse(JSON.parse(await beadsCommand(c, ['list', '--all', '--limit', '0', '--json'], exec)));
+    if (existing.some(b => {
+      if (b.description?.includes(`agent-followups:${id}`)) return true;
+      const project = b.labels?.find(label => label.startsWith('project:'))?.slice(8)
+        ?? b.description?.match(/^Project: ([a-zA-Z0-9_-]+)$/m)?.[1];
+      // Unscoped legacy issues remain a conservative manual duplicate check.
+      return (!project || project === task.candidate.project) && candidateId({ ...task.candidate, title: b.title }) === id;
+    }))
       throw new Error('An existing Beads issue matches this proposal. Reject/link it instead of creating a duplicate.');
     // Check discovery parents before mutation; they must be in this configured Beads store.
     for (const parent of task.parentBeads) await beadsCommand(c, ['show', parent, '--json'], exec);
     // Persist intent before the external mutation. Unknown outcomes never auto-retry.
     task.status = 'accepting'; await atomicJson(path, task);
     const raw = await beadsCommand(c, ['create', '--title', task.candidate.title, '--type', task.candidate.kind === 'bug' ? 'bug' : 'task',
-      '--priority', '2', '--description', beadDescription(task), '--acceptance', task.candidate.acceptance,
+      '--priority', '2', '--labels', `project:${task.candidate.project}`, '--description', beadDescription(task), '--acceptance', task.candidate.acceptance,
       ...(task.parentBeads.length ? ['--deps', task.parentBeads.map(p => `discovered-from:${p}`).join(',')] : []), '--json'], exec);
     const created = z.object({ id: z.string().min(1) }).parse(JSON.parse(raw));
     task.status = 'accepted'; task.beadId = created.id; await atomicJson(path, task); return task;

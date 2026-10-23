@@ -144,3 +144,34 @@ test('concurrent hook deliveries publish complete immutable events once', async 
   await Promise.all(Array.from({ length: 20 }, () => hook(c, payload)));
   assert.equal((await drain(c, 20, extractor())).length, 1);
 });
+test('double-dot-prefixed child directories cannot bypass containment or project matching', async t => {
+  const { c, config, repo } = await fixture(t);
+  await atomicJson(config, { ...c, stateDir: join(repo, '..private') });
+  await assert.rejects(loadConfig(config), /outside/);
+  const nested = join(repo, '..source'); await mkdir(nested);
+  await hook(c, { hook_event_name: 'Stop', session_id: 'dotdot-child', cwd: nested, last_assistant_message: 'Observed follow-up' });
+  assert.equal((await drain(c, 1, extractor())).length, 1);
+});
+test('same-title Beads issues in another explicit project do not block a legitimate import', async t => {
+  const { c, task } = await propose(t);
+  const accepted = await accept(c, task.id, async (b, a) => {
+    if (a[0] === 'list') return JSON.stringify([{ id: 'other-1', title: finding.title, description: 'Project: ui-eval' }]);
+    assert.equal(a[0], 'create'); assert.ok(a.includes('project:app')); return '{"id":"app-2"}';
+  });
+  assert.equal(accepted.beadId, 'app-2');
+});
+test('streaming multibyte subprocess stdout retains correct Unicode JSON', async () => {
+  const output = await command(process.execPath, ['-e', "const b=Buffer.from(JSON.stringify({title:'法语 é'}));process.stdout.write(b.subarray(0,11));setTimeout(()=>process.stdout.write(b.subarray(11)),20)"], { cwd: tmpdir() });
+  assert.deepEqual(JSON.parse(output), { title: '法语 é' });
+});
+test('Beads subprocess cannot inherit database redirection or auto-push mode', async t => {
+  const { c, task } = await propose(t);
+  const previous = { BEADS_DB: process.env.BEADS_DB, BD_DB: process.env.BD_DB };
+  process.env.BEADS_DB = '/wrong/database'; process.env.BD_DB = '/another/database';
+  try {
+    await accept(c, task.id, async (b, a, o) => {
+      assert.equal(o.env.BEADS_DB, undefined); assert.equal(o.env.BD_DB, undefined); assert.ok(a.includes('--sandbox'));
+      return a[0] === 'list' ? '[]' : '{"id":"safe-1"}';
+    });
+  } finally { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
+});
