@@ -7,7 +7,7 @@ Run `npm ci`, `npm run check` and `npm pack --dry-run` on the source to be deliv
 ## Runtime acceptance steps
 
 1. Initialize a private external Beads planning store and create a synthetic parent task.
-2. Record bounded synthetic evidence, run a real authenticated Codex extraction, inspect proposals and accept one into Beads.
+2. Record bounded synthetic evidence, run a real authenticated Codex extraction and inspect proposals. Verify unreviewed acceptance is blocked before any Beads call. Inspect current canonical source/evidence and existing tasks, then use `review set` to record a `current` verdict with checked source identities before accepting one into Beads; see [proposal review](proposal-review.md).
 3. Inspect the imported description, acceptance, target project and native discovery relation. Verify a repeated accept creates nothing new.
 4. Merge generated handlers with existing user-scoped hooks, review/trust them in Codex, and start a fresh session in an explicitly configured project.
 5. Verify actual startup context and queued Stop observation, including a discussion without code changes. Check outside-project and extractor recursion exclusions.
