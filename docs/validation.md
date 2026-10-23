@@ -2,7 +2,7 @@
 
 ## Required checks
 
-Run `npm ci`, `npm run check` and `npm pack --dry-run` on the source to be delivered. CI uses Node 24 and 26 on Linux. The local development environment uses macOS arm64; provider calls in automated tests are replaced by explicit fakes.
+Use the pnpm version pinned in `package.json`. Run `pnpm install --frozen-lockfile`, `pnpm run check` and `pnpm pack --dry-run` on the source to be delivered. CI uses Node 24 and 26 on Linux. The local development environment uses macOS arm64; provider calls in automated tests are replaced by explicit fakes.
 
 ## Runtime acceptance steps
 
