@@ -27,3 +27,7 @@ Event IDs hash sanitized input. Proposal IDs hash normalized title and target pr
 ## Queue visibility
 
 `status` inspects immutable events, their analysis receipts and proposal/import receipts without provider calls or repair. It reports a best-effort snapshot because hook writers and explicit recovery may run concurrently. Lock presence and running receipts do not attest process liveness. Hook timestamps do not attest trust or complete lifecycle coverage. Beads retains canonical imported task status; status counts accepted import receipts only. Unreadable/invalid recognized records are counted separately rather than reported as empty or successful.
+
+## Explicit bounded analysis loop
+
+`watch` repeatedly invokes the existing drain with required polling and total event budgets. The README owns option bounds and exit semantics. Each batch takes the existing operation lock; idle intervals hold none. Failure stops the loop after the current batch without retrying previous receipts or Beads writes. SIGINT/SIGTERM cancellation preserves existing subprocess cleanup and recovery behavior. No background service, automatic restart, task acceptance or implementation executor is installed. A runner's presence must not be inferred from lock presence because it releases the lock between batches.

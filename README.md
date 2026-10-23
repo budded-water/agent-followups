@@ -71,7 +71,7 @@ This prints definitions for `SessionStart`, `UserPromptSubmit`, `Stop`, `Interru
 
 Handlers only write bounded observations and return JSON. They do not call a model, block normal completion, start background processes or run Beads. Unknown project paths, internal extractor sessions and hook-triggered Stop continuations are ignored. `SessionStart` adds workflow guidance. Stop means a turn boundary, not that the overall task is complete. Interrupt/SessionEnd are best-effort markers; process crashes can skip them.
 
-No daemon is installed. Hooks provide durable collection; someone must run `drain`, directly or using a separately configured local scheduler. A 3-second hook timeout may still prevent collection on a slow filesystem. Test the actual client lifecycle; printing a valid definition is not acceptance.
+No daemon is installed. Hooks provide durable collection; an operator must run `drain` once or explicitly start bounded foreground `watch`. A separately configured scheduler is outside this package. A 3-second hook timeout may still prevent collection on a slow filesystem. Test the actual client lifecycle; printing a valid definition is not acceptance.
 
 ## Provide explicit evidence
 
@@ -128,7 +128,7 @@ Acceptance creates a task with evidence, acceptance criteria, next step, project
 - If a process crashes holding `operation.lock`, first verify the worker and its child processes have stopped; then remove only that lock. Do not clear a live lock.
 - Extraction writes a running receipt first. Failed/interrupted checks are not retried automatically. After resolving the cause, use `retry --id EVENT_ID --reason "..."`. Recovery preserves the previous receipt. An unreadable, invalid or ID-mismatched event gets a failed receipt and consumes one drain slot; independent events can still run. Its original bytes are preserved. Before retrying it, preserve a backup and restore valid original evidence or fix access permissions; do not invent replacement evidence or reset the queue.
 - Beads creation persists an `accepting` intent before the write. A timeout, invalid reply or crash may leave a task created with no local acknowledgement. Do not repeat creation. Search Beads for `agent-followups:PROPOSAL_ID`, then use `reconcile --id PROPOSAL_ID --bead EXISTING_BEAD_ID`; the CLI verifies the marker before attaching it. If no task exists, manual investigation/recovery is required; there is deliberately no blind reset.
-- Evidence, model output and event receipts live under private state. Raw subprocess stderr is not copied into public errors. The Codex provider receives supplied evidence during `drain`; private local storage does not make model processing offline.
+- Evidence, model output and event receipts live under private state. Raw subprocess stderr is not copied into public errors. The Codex provider receives supplied evidence during `drain` or `watch`; private local storage does not make model processing offline.
 - Keep the whole state directory and the Beads database backed up separately. No automatic retention, remote backup or installation-wide resource manager is included.
 
 ## Validation scope
@@ -148,3 +148,17 @@ Beads owns task status after import. Select the same external `beadsDir` used by
 ```
 
 Use `show ID` in place of `ready` to inspect a selected task. Clear inherited database overrides each time; do not export a global Beads directory that silently changes other projects. A ready task remains subject to the selected repository's execution authorization.
+
+## Bounded foreground runner
+
+Start `watch` explicitly in a terminal while you work in other sessions:
+
+```sh
+agent-followups watch --config /absolute/private/followups.json --max-cycles 10 --max-events 5 --interval 60 --limit 1
+```
+
+Both budgets are required: `max-cycles` counts polls including empty ones (1–60), and `max-events` caps attempted events across all batches (1–20). Empty markers and corrupt inputs also consume event budget; provider invocations cannot exceed this budget. `interval` is the idle delay between completed batches in seconds (1–3600, default 60), not a fixed-rate schedule. Each batch uses `limit` (1–20, default 1), reduced to the remaining event budget. Bounds limit attempts, not tokens, money or an exact wall-clock deadline. Each provider call retains the configured timeout.
+
+The runner emits one compact JSON line per completed cycle and one final summary. It exits at either budget, after a batch containing a failure, or on SIGINT/SIGTERM. An existing operation lock or filesystem error aborts without stealing locks or retrying writes. Ordinary completion exits 0, batch failure exits 1, and handled SIGINT/SIGTERM exit 130/143. Active extraction cancellation uses the existing subprocess termination mechanism; idle waits are cancelled promptly. Forced kills can still leave a running receipt or lock requiring explicit recovery.
+
+It acquires the operation lock only for each drain, allowing hooks to enqueue and operators to review between batches. Run one watch process per state store; it is a foreground command, not a daemon or process-liveness registry. It never accepts proposals, runs implementation work, installs a scheduler or restarts itself. Existing failed/running receipts remain skipped until explicit recovery; inspect `status` before starting. Progress is stdout, not a second persistent task ledger. Installing the CLI does not start watch.

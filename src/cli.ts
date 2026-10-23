@@ -2,6 +2,7 @@
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import { watch } from './runner.js';
 import { loadConfig, boundedInput, readJson } from './io.js';
 import { hook, hookConfig, record, drain, status, proposals, accept, reject, reconcile, retry, exportMarkdown } from './workflow.js';
 
@@ -11,6 +12,8 @@ const help = `agent-followups <command> --config /absolute/config.json
   hook                        Read one Codex hook payload from stdin; enqueue only
   record --project ID --input /path/evidence.json [--parent BEAD]
   drain [--limit 1]            Analyze queued evidence with isolated read-only Codex
+  watch --max-cycles N --max-events N [--interval 60] [--limit 1]
+                              Explicit bounded foreground analysis; no task acceptance
   status                      Inspect queue, proposal receipts and lock (no model calls)
   list                        List local proposals; accepted task status lives in Beads
   accept --id ID              Explicitly create one Beads task (no execution)
@@ -25,6 +28,7 @@ See README.md for configuration and recovery. Node >=24; Codex and Beads are ext
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     config: { type: 'string' }, input: { type: 'string' }, project: { type: 'string' }, parent: { type: 'string' },
+    'max-cycles': { type: 'string' }, 'max-events': { type: 'string' }, interval: { type: 'string' },
     limit: { type: 'string' }, id: { type: 'string' }, reason: { type: 'string' }, bead: { type: 'string' }, help: { type: 'boolean' },
   } });
   const operation = positionals[0];
@@ -37,6 +41,21 @@ async function main() {
     case 'hook': result = await hook(c, JSON.parse(await boundedInput(process.stdin))); break;
     case 'record': result = { id: await record(c, required('project'), await readJson(resolve(required('input'))), values.parent) }; break;
     case 'drain': result = await drain(c, Number(values.limit ?? '1')); if ((result as { state: string }[]).some(r => r.state === 'failed')) process.exitCode ||= 1; break;
+    case 'watch': {
+      const controller = new AbortController();
+      const interrupt = () => { process.exitCode = 130; controller.abort(); };
+      const terminate = () => { process.exitCode = 143; controller.abort(); };
+      process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
+      try {
+        const summary = await watch(c, { maxCycles: Number(required('max-cycles')), maxEvents: Number(required('max-events')),
+          intervalSeconds: Number(values.interval ?? '60'), limit: Number(values.limit ?? '1') }, {
+          signal: controller.signal, onCycle: cycle => { console.log(JSON.stringify({ type: 'cycle', ...cycle })); },
+        });
+        if (summary.reason === 'failed') process.exitCode ||= 1;
+        console.log(JSON.stringify({ type: 'summary', ...summary }));
+      } finally { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate); }
+      return;
+    }
     case 'status': result = await status(c); break;
     case 'list': result = await proposals(c); break;
     case 'accept': result = await accept(c, required('id')); break;
