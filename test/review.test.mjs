@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Task } from '../dist/contracts.js';
 import { atomicJson, hash, withLock, command } from '../dist/io.js';
 import { proposalReview, setProposalReview, similarProposals, reviewTask } from '../dist/review.js';
-import { accept, exportMarkdown } from '../dist/workflow.js';
+import { accept, exportMarkdown, record, drain, proposals } from '../dist/workflow.js';
 import { currentReview } from './helpers.mjs';
 async function fixture(t) {
  const root=await mkdtemp(join(tmpdir(),'followup-review-'));t.after(()=>rm(root,{recursive:true,force:true}));
@@ -26,7 +26,7 @@ test('new observations invalidate review while preserving immutable review histo
  const {c,add}=await fixture(t);const task=await add('Policy review');const first=await setProposalReview(c,task.id,currentReview);const path=join(c.stateDir,'review-history',task.id,first.revision+'.json');const bytes=await readFile(path,'utf8');
  const changed=await reviewTask(c,task.id);changed.eventIds.push(hash('new contradictory observation'));await atomicJson(join(c.stateDir,'proposals',task.id+'.json'),changed);
  assert.equal((await proposalReview(c,task.id)).state,'stale');await assert.rejects(accept(c,task.id,async()=>{throw new Error('no external call');}),/review is required/);
- const second=await setProposalReview(c,task.id,{...currentReview,reason:'Checked new observation'});assert.notEqual(first.revision,second.revision);assert.equal(await readFile(path,'utf8'),bytes);assert.equal((await proposalReview(c,task.id)).state,'valid');
+ const second=await setProposalReview(c,task.id,{...currentReview,reason:'Checked new observation'});assert.notEqual(first.revision,second.revision);assert.equal(await readFile(path,'utf8'),bytes);assert.equal((await proposalReview(c,task.id)).state,'valid');assert.equal((await proposalReview(c,task.id,first.revision)).state,'stale');
 });
 test('resolved and needs-investigation verdicts block imports without rejecting proposal state',async t=>{
  const {c,add}=await fixture(t);const task=await add('Old issue');
@@ -37,7 +37,7 @@ test('manual duplicate association preserves both proposals and forbids cross-pr
  const {c,add}=await fixture(t);const a=await add('Invalidate source validation after policy changes');const b=await add('Investigate validation evidence reuse after policy changes');const other=await add('Other project','other');
  for(const id of [a.id,other.id,hash('missing')])await assert.rejects(setProposalReview(c,a.id,{...currentReview,verdict:'duplicate',duplicateOf:id}));
  await setProposalReview(c,a.id,{...currentReview,verdict:'duplicate',duplicateOf:b.id});assert.equal((await proposalReview(c,a.id)).review.duplicateOf,b.id);await assert.rejects(accept(c,a.id),/review is required/);
- await assert.rejects(setProposalReview(c,b.id,{...currentReview,verdict:'duplicate',duplicateOf:a.id}));const third=await add('Third policy proposal');await assert.rejects(setProposalReview(c,b.id,{...currentReview,verdict:'duplicate',duplicateOf:third.id}),/incoming duplicate/);assert.equal((await reviewTask(c,a.id)).eventIds.length,1);assert.equal((await reviewTask(c,b.id)).status,'proposed');
+ await assert.rejects(setProposalReview(c,b.id,{...currentReview,verdict:'duplicate',duplicateOf:a.id}));const stale=await reviewTask(c,a.id);stale.eventIds.push(hash('later evidence'));await atomicJson(join(c.stateDir,'proposals',a.id+'.json'),stale);assert.equal((await proposalReview(c,a.id)).state,'stale');const third=await add('Third policy proposal');await assert.rejects(setProposalReview(c,b.id,{...currentReview,verdict:'duplicate',duplicateOf:third.id}),/incoming duplicate/);assert.equal((await reviewTask(c,a.id)).eventIds.length,2);assert.equal((await reviewTask(c,b.id)).status,'proposed');
 });
 test('similarity suggests paraphrased local candidates with reasons, excludes other projects and never mutates',async t=>{
  const {c,add}=await fixture(t);const a=await add('Invalidate source checks when validation policy changes','app','one.json');const b=await add('Investigate validation evidence reuse after release policy changes','app','two.json');await add(b.candidate.title,'other');a.candidate.rationale='A compliance issue';a.candidate.nextStep='Inspect identity';b.candidate.rationale='Evidence from an older release';b.candidate.nextStep='Reproduce behavior';await atomicJson(join(c.stateDir,'proposals',a.id+'.json'),a);await atomicJson(join(c.stateDir,'proposals',b.id+'.json'),b);const before=await readFile(join(c.stateDir,'proposals',a.id+'.json'),'utf8');
@@ -55,4 +55,11 @@ test('review CLI round trip and scope revocation do not invoke model or import t
  const repo=await mkdtemp(join(tmpdir(),'review-cli-repo-'));t.after(()=>rm(repo,{recursive:true,force:true}));await atomicJson(config,{...c,projects:[{id:'app',root:repo}]});
  const args=['dist/cli.js','review','set','--id',task.id,'--input',input,'--config',config];const output=await command(process.execPath,args,{cwd:join(import.meta.dirname,'..'),timeoutMs:5000});assert.equal(JSON.parse(output).review.verdict,'current');
  c.projects=[];await assert.rejects(setProposalReview(c,task.id,currentReview),/no longer configured/);await assert.rejects(similarProposals(c,task.id),/no longer configured/);
+});
+
+test('real duplicate discovery invalidates a current review before a subsequent import',async t=>{
+ const {c}=await fixture(t);const candidate={title:'Check source validation policy reuse',project:'app',kind:'investigation',certainty:'hypothesis',evidence:[{source:'fixture report',summary:'Policy changed without rechecking'}],rationale:'Check policy identity',acceptance:'Reproduce policy change',nextStep:'Inspect source'};
+ const extractor=async(b,a)=>{await atomicJson(a[a.indexOf('-o')+1],{outcome:'candidates_found',candidates:[candidate]});return '';};
+ await record(c,'app',[{source:'first observation',summary:'First occurrence'}]);await drain(c,1,extractor);const [task]=await proposals(c);await setProposalReview(c,task.id,currentReview);assert.equal((await proposalReview(c,task.id)).state,'valid');
+ await record(c,'app',[{source:'second observation',summary:'New occurrence requiring fresh inspection'}]);await drain(c,1,extractor);assert.equal((await proposals(c)).length,1);assert.equal((await proposals(c))[0].eventIds.length,2);assert.equal((await proposalReview(c,task.id)).state,'stale');let calls=0;await assert.rejects(accept(c,task.id,async()=>{calls++;return '[]';}),/review is required/);assert.equal(calls,0);
 });
