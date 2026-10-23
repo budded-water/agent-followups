@@ -66,8 +66,9 @@ export async function withLock<T>(c: Settings, fn: () => Promise<T>): Promise<T>
   try { await file.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString() })); return await fn(); }
   finally { await file.close(); await rm(path); }
 }
-export type Command = (binary: string, args: string[], options: { cwd: string; input?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }) => Promise<string>;
+export type Command = (binary: string, args: string[], options: { cwd: string; input?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; signal?: AbortSignal }) => Promise<string>;
 export const command: Command = (binary, args, options) => new Promise((done, fail) => {
+  if (options.signal?.aborted) { fail(new Error('Command aborted before startup')); return; }
   const child = spawn(binary, args, { cwd: options.cwd, env: options.env ?? process.env, shell: false,
     detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
   const output: Buffer[] = [];
@@ -80,6 +81,9 @@ export const command: Command = (binary, args, options) => new Promise((done, fa
     if (failure) return;
     failure = new Error(message); kill('SIGTERM'); force = setTimeout(() => kill('SIGKILL'), 1000);
   };
+  const abort = () => stop('Command aborted');
+  options.signal?.addEventListener('abort', abort, { once: true });
+  if (options.signal?.aborted) abort();
   const interrupt = () => { process.exitCode = 130; stop('Command interrupted'); };
   const terminate = () => { process.exitCode = 143; stop('Command terminated'); };
   process.once('SIGINT', interrupt); process.once('SIGTERM', terminate);
@@ -90,6 +94,7 @@ export const command: Command = (binary, args, options) => new Promise((done, fa
   child.stdin.on('error', () => { /* close reports subprocess failure */ });
   child.stdin.end(options.input ?? '');
   child.on('close', code => {
+    options.signal?.removeEventListener('abort', abort);
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate);
     clearTimeout(timer); if (force) clearTimeout(force); kill('SIGKILL');
     if (failure || code !== 0) fail(failure ?? new Error(`Command failed (${code}): ${binary}; inspect provider state before retrying writes`));

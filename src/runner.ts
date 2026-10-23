@@ -24,7 +24,7 @@ export async function watch(c: Settings, options: WatchOptions, runtime: {
   const done = (reason: 'stopped' | 'failed' | 'event_limit' | 'cycle_limit') => ({ reason, cycles, processed });
   while (cycles < o.maxCycles && processed < o.maxEvents) {
     if (stopped()) return done('stopped');
-    const results = await drain(c, Math.min(o.limit, o.maxEvents - processed), runtime.exec ?? command);
+    const results = await drain(c, Math.min(o.limit, o.maxEvents - processed), runtime.exec ?? command, runtime.signal);
     cycles++; processed += results.length;
     await runtime.onCycle?.({ cycle: cycles, processed, remainingEvents: o.maxEvents - processed, results });
     if (stopped()) return done('stopped');

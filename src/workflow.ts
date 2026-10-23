@@ -126,7 +126,8 @@ export function extractionPrompt(c: Settings, event: WorkEvent) {
     `A linked task can target another project, but this proposal grants no execution or publication authority.\n` +
     `OBSERVATIONS:\n${JSON.stringify(event)}\n`;
 }
-export async function extract(c: Settings, event: WorkEvent, exec: Command = command) {
+export async function extract(c: Settings, event: WorkEvent, exec: Command = command, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const directory = join(c.stateDir, 'runs', event.id); await privateDir(directory);
   const output = join(directory, 'output.json'); await rm(output, { force: true });
   const schema = join(directory, 'schema.json');
@@ -136,19 +137,20 @@ export async function extract(c: Settings, event: WorkEvent, exec: Command = com
       type: 'array', maxItems: 5, items: z.toJSONSchema(Candidate, { target: 'draft-7' }),
     } },
   });
+  signal?.throwIfAborted();
   await exec(c.codexBinary, ['-a', 'never', 'exec', '--ignore-user-config', '--ephemeral', '--skip-git-repo-check',
     '-s', 'read-only', '-c', 'features.hooks=false', '-c', 'features.multi_agent=false',
     '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"', '-c', 'apps._default.enabled=false', '--output-schema', schema, '-o', output, '-'], {
-    cwd: directory, input: extractionPrompt(c, event), env: { ...process.env, AGENT_FOLLOWUPS_INTERNAL: '1' }, timeoutMs: c.timeoutSeconds * 1000,
+    cwd: directory, input: extractionPrompt(c, event), env: { ...process.env, AGENT_FOLLOWUPS_INTERNAL: '1' }, timeoutMs: c.timeoutSeconds * 1000, signal,
   });
   return Extraction.parse(await readJson(output));
 }
-export async function drain(c: Settings, limit = 1, exec: Command = command) {
+export async function drain(c: Settings, limit = 1, exec: Command = command, signal?: AbortSignal) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error('limit must be 1..20');
   return withLock(c, async () => {
     const result = [];
     for (const file of await records(c, 'events')) {
-      if (result.length >= limit || process.exitCode === 130 || process.exitCode === 143) break;
+      if (result.length >= limit || signal?.aborted || process.exitCode === 130 || process.exitCode === 143) break;
       const id = file.slice(0, -5);
       const receipt = join(c.stateDir, 'checks', file);
       if (await exists(receipt)) continue;
@@ -161,9 +163,10 @@ export async function drain(c: Settings, limit = 1, exec: Command = command) {
         result.push({ id, state: 'failed' });
         continue;
       }
+      if (signal?.aborted) break;
       await atomicJson(receipt, { state: 'running', eventId: event.id, startedAt: now() });
       try {
-        const r = event.evidence.length ? await extract(c, event, exec) : { outcome: 'no_findings' as const, candidates: [] };
+        const r = event.evidence.length ? await extract(c, event, exec, signal) : { outcome: 'no_findings' as const, candidates: [] };
         const proposals = await saveCandidates(c, event, r.candidates);
         const completed = { state: 'succeeded', outcome: r.outcome, proposals, finishedAt: now() };
         await atomicJson(receipt, completed); result.push({ id: event.id, ...completed });
