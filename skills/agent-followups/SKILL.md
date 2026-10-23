@@ -14,3 +14,5 @@ Select the configured external planning store explicitly for task lookup. Use a 
 If Beads creation has an unknown result, inspect Beads for the `agent-followups:<proposal-id>` marker and use `reconcile`; never repeat creation blindly. See the installed project's README for configuration and recovery. Do not automatically install hooks, launch a worker, merge or publish.
 
 Use `agent-followups focus context --project PROJECT_ID` to refresh active observation priorities in an existing session. Follow the installed focus guide for explicit set/pause/archive/activate commands; preserve evidence ownership and never generate findings just to satisfy a direction. Pausing a direction does not close imported tasks.
+
+Before a new import, inspect `similar --id ID`, verify current source/evidence and existing Beads tasks, then explicitly record `review set --id ID --input FILE`. Use checked source identities and evidence, not the model certainty label. Only a valid `current` review permits import; resolved, duplicate, unreviewed, stale and needs-investigation records do not. See the packaged docs/proposal-review.md. Reviews do not authorize task execution.

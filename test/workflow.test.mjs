@@ -1,3 +1,4 @@
+import { acceptReviewed as accept } from './helpers.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm, stat, symlink } from 'node:fs/promises';
@@ -5,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Config, Extraction } from '../dist/contracts.js';
 import { atomicJson, loadConfig, command, withLock } from '../dist/io.js';
-import { hook, record, drain, proposals, accept, reconcile, retry, reject, exportMarkdown, hookConfig } from '../dist/workflow.js';
+import { hook, record, drain, proposals, reconcile, retry, reject, exportMarkdown, hookConfig } from '../dist/workflow.js';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'agent-followups-'));

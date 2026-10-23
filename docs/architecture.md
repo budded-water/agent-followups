@@ -22,7 +22,7 @@ UI-eval owns scenario execution, verification plans and evidence reconciliation.
 
 ## Deduplication
 
-Event IDs hash sanitized input. Proposal IDs hash normalized title and target project. The latter intentionally avoids an additional model call: it is deterministic but misses differently worded duplicates. Acceptance inspects same-project Beads titles and global import markers; unscoped matching titles require manual duplicate review; independent external writers can race this preflight. One runner/state store per planning workflow is the supported deployment. Semantic duplicate review remains an operator responsibility.
+Event IDs hash sanitized input. Proposal IDs hash normalized title and target project. The latter intentionally avoids an additional model call: it is deterministic but misses differently worded duplicates. Acceptance inspects same-project Beads titles and global import markers; unscoped matching titles require manual duplicate review; independent external writers can race this preflight. One runner/state store per planning workflow is the supported deployment. The local `similar` command now provides bounded lexical/evidence-source suggestions, and operators can record duplicate associations. It does not merge candidates or provide general semantic equivalence. [Proposal review](proposal-review.md) owns the review schema, invalidation and import gate.
 
 ## Queue visibility
 
@@ -37,3 +37,7 @@ Event IDs hash sanitized input. Proposal IDs hash normalized title and target pr
 The private focus store owns current observation priorities and immutable historical definitions. [Focus directions](focus-directions.md) owns the definition, lifecycle and attribution contract. SessionStart and extraction read applicable active directions; existing sessions require explicit refresh. Proposal focusRuns are provenance, not independent task status. Pausing directions cannot close tasks or erase earlier findings.
 
 Storage-integrity and current-project import guards are documented in [focus storage and import guards](focus-directions.md#storage-and-import-guards) and apply across the private store.
+
+## Proposal review ownership
+
+Operator review is a separate private provenance ledger with immutable, hash-verified history. It does not mutate proposal decisions or Beads task status. New imports require a current review of the exact proposal/evidence association snapshot before any external call. Import receipts pin that review revision; later observations do not rewrite the original import evidence.

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { proposalReview, setProposalReview, similarProposals } from './review.js';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
@@ -19,6 +20,9 @@ const help = `agent-followups <command> --config /absolute/config.json
                               Explicit bounded foreground analysis; no task acceptance
   status                      Inspect queue, proposal receipts and lock (no model calls)
   list                        List local proposals; accepted task status lives in Beads
+  similar --id ID             Suggest local duplicates (no model call or merge)
+  review show --id ID [--revision HASH] | set --id ID --input FILE
+                              Record operator evidence and source identities
   accept --id ID              Explicitly create one Beads task (no execution)
   reject --id ID --reason TEXT
   reconcile --id ID --bead ID  Attach an existing matching Bead after an unknown write
@@ -74,6 +78,12 @@ async function main() {
     }
     case 'status': result = await status(c); break;
     case 'list': result = await proposals(c); break;
+    case 'similar': result = await similarProposals(c, required('id')); break;
+    case 'review':
+      if (positionals[1] === 'show') result = await proposalReview(c, required('id'), values.revision);
+      else if (positionals[1] === 'set') result = await setProposalReview(c, required('id'), await readJson(resolve(required('input'))));
+      else throw new Error('Unknown review operation');
+      break;
     case 'accept': result = await accept(c, required('id')); break;
     case 'reject': result = await reject(c, required('id'), required('reason')); break;
     case 'reconcile': result = await reconcile(c, required('id'), required('bead')); break;

@@ -101,10 +101,15 @@ agent-followups record --config /absolute/private/followups.json \
 agent-followups drain --config /absolute/private/followups.json --limit 3
 agent-followups list --config /absolute/private/followups.json
 agent-followups export --config /absolute/private/followups.json > /absolute/private/followups.md
+agent-followups similar --config /absolute/private/followups.json --id PROPOSAL_ID
+agent-followups review set --config /absolute/private/followups.json --id PROPOSAL_ID \
+  --input /absolute/private/review.json
 agent-followups accept --config /absolute/private/followups.json --id PROPOSAL_ID
 agent-followups reject --config /absolute/private/followups.json \
   --id PROPOSAL_ID --reason "Already tracked or not worth pursuing"
 ```
+
+**Import compatibility change:** every new import requires a valid operator review with verdict `current`. Legacy proposals remain readable; existing accepted receipts and unknown-write reconciliation retain their behavior. See [proposal review](docs/proposal-review.md) for review JSON, historical state, duplicate associations and similarity limits.
 
 Inspect the queue without starting analysis:
 

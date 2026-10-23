@@ -70,6 +70,7 @@ export const Task = z.object({
   status: z.enum(['proposed', 'accepting', 'accepted', 'rejected']),
   createdAt: z.string(),
   beadId: z.string().optional(),
+  importReview: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   reason: z.string().optional(),
 });
 export type Proposal = z.infer<typeof Task>;

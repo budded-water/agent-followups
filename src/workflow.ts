@@ -1,3 +1,4 @@
+import { requireCurrentReview, proposalReview } from './review.js';
 import { readdir, rm, link } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -215,7 +216,7 @@ export async function proposals(c: Settings) {
 }
 export function beadDescription(task: z.infer<typeof Task>) {
   const f = task.candidate;
-  return [`agent-followups:${task.id}`, `Project: ${f.project}`, `Certainty: ${f.certainty}`, '', '## Evidence',
+  return [`agent-followups:${task.id}`, `Project: ${f.project}`, `Certainty: ${f.certainty}`, `Import review: ${task.importReview ?? 'not imported'}`, '', '## Evidence',
     ...f.evidence.map(e => `- ${e.source}: ${e.summary}`), '', '## Value', f.rationale, '', '## Next step', f.nextStep,
     '', '## Source events', ...task.eventIds, '', '## Archived provenance', ...(task.provenanceArchive ? [`Private provenance-archives/${task.id}-${task.provenanceArchive}.json; historical snapshot, not current task status.`] : []), '', '## Focus provenance', ...task.focusRuns.map(r => `${r.revision}: ${r.matchedIds.join(', ') || '(unmatched)'}; event ${r.eventId}`), '', '## Discovery parents', ...task.parentBeads,
     '', 'Proposal acceptance does not authorize implementation, merge, publication or declare UI/release acceptance.'].join('\n');
@@ -242,6 +243,7 @@ export async function accept(c: Settings, id: string, exec: Command = command) {
     if (task.status === 'accepted') return task;
     if (task.status !== 'proposed') throw new Error('Proposal cannot be accepted: reconcile an interrupted write or use another proposed task');
     if (!c.projects.some(p => p.id === task.candidate.project)) throw new Error('Proposal target is no longer configured');
+    task.importReview = await requireCurrentReview(c, id);
     const createArgs = ['create', '--title', task.candidate.title, '--type', task.candidate.kind === 'bug' ? 'bug' : 'task',
       '--priority', '2', '--labels', `project:${task.candidate.project}`, '--body-file', '-', '--acceptance', task.candidate.acceptance,
       ...(task.parentBeads.length ? ['--deps', task.parentBeads.map(p => `discovered-from:${p}`).join(',')] : []), '--json'];
@@ -285,7 +287,7 @@ export async function reject(c: Settings, id: string, reason: string) {
   });
 }
 export async function exportMarkdown(c: Settings) {
-  return (await proposals(c)).map(t => `# ${t.candidate.title}\n\nID: ${t.id}\nStatus: ${t.status}\nBeads: ${t.beadId ?? 'not imported'}\n\n${beadDescription(t)}\n\n## Acceptance\n${t.candidate.acceptance}\n`).join('\n---\n\n');
+  return (await Promise.all((await proposals(c)).map(async t => ({ ...t, reviewState: await proposalReview(c, t.id) })))).map(t => `# ${t.candidate.title}\n\nID: ${t.id}\nStatus: ${t.status}\nReview: ${t.reviewState.state}${t.reviewState.review ? ' / ' + t.reviewState.review.verdict : ''}\nBeads: ${t.beadId ?? 'not imported'}\n\n${beadDescription(t)}\n\n## Acceptance\n${t.candidate.acceptance}\n`).join('\n---\n\n');
 }
 export function hookConfig(configPath: string, cliPath: string) {
   const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;

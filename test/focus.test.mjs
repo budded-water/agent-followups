@@ -1,3 +1,4 @@
+import { acceptReviewed as accept } from './helpers.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
@@ -69,11 +70,11 @@ test('starter directions fit context budget and history tampering cannot rewrite
 });
 
 test('removed target projects remain inspectable but cannot create external tasks',async t=>{
- const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);c.projects=c.projects.filter(p=>p.id!=='app');const {accept}=await import('../dist/workflow.js');let calls=0;
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);c.projects=c.projects.filter(p=>p.id!=='app');let calls=0;
  await assert.rejects(accept(c,task.id,async()=>{calls++;return '[]';}),/no longer configured/);assert.equal(calls,0);assert.equal((await proposals(c))[0].status,'proposed');
 });
 test('mismatched restored proposal IDs cannot mutate local state or call Beads',async t=>{
- const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);const path=join(c.stateDir,'proposals',task.id+'.json');const wrong={...task,id:'f'.repeat(64)};await atomicJson(path,wrong);const before=await readFile(path,'utf8');const {accept,reconcile}=await import('../dist/workflow.js');let calls=0;const beads=async()=>{calls++;return '[]';};
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);const path=join(c.stateDir,'proposals',task.id+'.json');const wrong={...task,id:'f'.repeat(64)};await atomicJson(path,wrong);const before=await readFile(path,'utf8');const {reconcile}=await import('../dist/workflow.js');let calls=0;const beads=async()=>{calls++;return '[]';};
  await assert.rejects(accept(c,task.id,beads),/identity mismatch/);await assert.rejects(reject(c,task.id,'wrong restore'),/identity mismatch/);assert.equal(await readFile(path,'utf8'),before);
  await atomicJson(path,{...wrong,status:'accepting'});await assert.rejects(reconcile(c,task.id,'existing',beads),/identity mismatch/);assert.equal(calls,0);
  await record(c,'app',[{...evidence[0],source:'duplicate'}]);assert.equal((await drain(c,1,output([{...candidate,focusIds:[]}])))[0].state,'failed');assert.equal(JSON.parse(await readFile(path,'utf8')).id,wrong.id);
@@ -89,7 +90,7 @@ test('queued source revocation prevents provider calls while preserving original
  const result=await drain(c,1,async()=>{calls++;throw new Error('must not send revoked evidence');});assert.equal(result[0].state,'failed');assert.equal(calls,0);assert.equal(await readFile(path,'utf8'),original);assert.deepEqual(await proposals(c),[]);
 });
 test('large import descriptions use stdin rather than oversized process arguments',async t=>{
- const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);task.eventIds.push(...Array.from({length:3000},(_,i)=>i.toString(16).padStart(64,'0')));await atomicJson(join(c.stateDir,'proposals',task.id+'.json'),task);const {accept}=await import('../dist/workflow.js');
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);task.eventIds.push(...Array.from({length:3000},(_,i)=>i.toString(16).padStart(64,'0')));await atomicJson(join(c.stateDir,'proposals',task.id+'.json'),task);
  const done=await accept(c,task.id,async(b,a,o)=>{if(a[0]==='list')return '[]';assert.equal(a[a.indexOf('--body-file')+1],'-');assert.ok(Buffer.byteLength(o.input)>128*1024);assert.ok(a.every(v=>Buffer.byteLength(v)<32768));return '{"id":"imported-1"}';});assert.equal(done.status,'accepted');
 });
 test('near-limit legacy reconciliation preserves full provenance and publishes a writable receipt',async t=>{
@@ -99,7 +100,7 @@ test('near-limit legacy reconciliation preserves full provenance and publishes a
 });
 
 test('transport and reconciliation identity bounds reject before intent or external calls',async t=>{
- const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);const path=join(c.stateDir,'proposals',task.id+'.json');task.parentBeads=Array.from({length:1000},(_,i)=>'parent-'+i.toString(16).padStart(64,'0'));await atomicJson(path,task);const {accept,reconcile}=await import('../dist/workflow.js');let calls=0;const fake=async()=>{calls++;throw new Error('must not call');};
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);const path=join(c.stateDir,'proposals',task.id+'.json');task.parentBeads=Array.from({length:1000},(_,i)=>'parent-'+i.toString(16).padStart(64,'0'));await atomicJson(path,task);const {reconcile}=await import('../dist/workflow.js');let calls=0;const fake=async()=>{calls++;throw new Error('must not call');};
  await assert.rejects(accept(c,task.id,fake),/transport budget/);assert.equal((await proposals(c))[0].status,'proposed');await assert.rejects(reconcile(c,task.id,'x'.repeat(513),fake));assert.equal(calls,0);
 });
 
@@ -118,7 +119,7 @@ test('a later invalid replacement cannot publish earlier valid candidates in a b
 });
 
 test('compacted unknown imports retain native parents and chained provenance through recovery',async t=>{
- const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [initial]=await proposals(c);const {MAX_JSON_BYTES,jsonSize}=await import('../dist/io.js');const {accept,reconcile}=await import('../dist/workflow.js');const path=join(c.stateDir,'proposals',initial.id+'.json');
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [initial]=await proposals(c);const {MAX_JSON_BYTES,jsonSize}=await import('../dist/io.js');const {reconcile}=await import('../dist/workflow.js');const path=join(c.stateDir,'proposals',initial.id+'.json');
  const fill=task=>{const unit=jsonSize({...task,eventIds:[...task.eventIds,'0'.repeat(64)]})-jsonSize(task);const n=Math.floor((MAX_JSON_BYTES-jsonSize(task)-80)/unit);task.eventIds.push(...Array.from({length:n},(_,i)=>i.toString(16).padStart(64,'0')));return task;};
  await atomicJson(path,fill({...initial,parentBeads:['parent-A']}));const original=await readFile(path,'utf8');let creates=0;
  await assert.rejects(accept(c,initial.id,async(b,a,o)=>{if(a[0]==='list')return '[]';if(a[0]==='show')return '[{"id":"parent-A"}]';creates++;assert.equal(a[a.indexOf('--deps')+1],'discovered-from:parent-A');assert.ok(o.input.includes('provenance-archives'));throw new Error('unknown external outcome');}));
