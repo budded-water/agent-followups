@@ -15,7 +15,8 @@
     "skills",
     "README.md",
     "LICENSE",
-    "docs"
+    "docs",
+    "examples"
   ],
   "scripts": {
     "build": "tsc",

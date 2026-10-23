@@ -31,3 +31,7 @@ Event IDs hash sanitized input. Proposal IDs hash normalized title and target pr
 ## Explicit bounded analysis loop
 
 `watch` repeatedly invokes the existing drain with required polling and total event budgets. The README owns option bounds and exit semantics. Each batch takes the existing operation lock; idle intervals hold none. Failure stops the loop after the current batch without retrying previous receipts or Beads writes. Cancellation is propagated through drain and extraction into the subprocess adapter. Preparation checks the signal before provider invocation; pre-aborted commands never spawn, and active children are terminated on abort. SIGINT/SIGTERM cancellation preserves explicit-recovery receipts and releases the operation lock. No background service, automatic restart, task acceptance or implementation executor is installed. A runner's presence must not be inferred from lock presence because it releases the lock between batches.
+
+## Focus ownership
+
+The private focus store owns current observation priorities and immutable historical definitions. [Focus directions](focus-directions.md) owns the definition, lifecycle and attribution contract. SessionStart and extraction read applicable active directions; existing sessions require explicit refresh. Proposal focusRuns are provenance, not independent task status. Pausing directions cannot close tasks or erase earlier findings.

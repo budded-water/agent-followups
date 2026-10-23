@@ -2,12 +2,15 @@
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import { activeFocus, readFocus, setFocus, changeFocus, focusContext } from './focus.js';
 import { watch } from './runner.js';
 import { loadConfig, boundedInput, readJson } from './io.js';
 import { hook, hookConfig, record, drain, status, proposals, accept, reject, reconcile, retry, exportMarkdown } from './workflow.js';
 
 const help = `agent-followups <command> --config /absolute/config.json
 
+  focus list [--revision HASH] | export | context --project ID | set --input FILE
+  focus activate|pause|archive --id ID
   hooks-json                  Print user-scoped Codex hook definitions (no installation)
   hook                        Read one Codex hook payload from stdin; enqueue only
   record --project ID --input /path/evidence.json [--parent BEAD]
@@ -28,7 +31,7 @@ See README.md for configuration and recovery. Node >=24; Codex and Beads are ext
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     config: { type: 'string' }, input: { type: 'string' }, project: { type: 'string' }, parent: { type: 'string' },
-    'max-cycles': { type: 'string' }, 'max-events': { type: 'string' }, interval: { type: 'string' },
+    revision: { type: 'string' }, 'max-cycles': { type: 'string' }, 'max-events': { type: 'string' }, interval: { type: 'string' },
     limit: { type: 'string' }, id: { type: 'string' }, reason: { type: 'string' }, bead: { type: 'string' }, help: { type: 'boolean' },
   } });
   const operation = positionals[0];
@@ -38,6 +41,19 @@ async function main() {
   const c = await loadConfig(required('config'));
   let result: unknown;
   switch (operation) {
+    case 'focus': {
+      switch (positionals[1]) {
+        case 'list': result = await readFocus(c, values.revision); break;
+        case 'export': { const { revision, ...doc } = await readFocus(c); result = doc; break; }
+        case 'context': console.log(focusContext(await activeFocus(c, required('project')))); return;
+        case 'set': result = await setFocus(c, await readJson(resolve(required('input')))); break;
+        case 'activate': result = await changeFocus(c, required('id'), 'active'); break;
+        case 'pause': result = await changeFocus(c, required('id'), 'paused'); break;
+        case 'archive': result = await changeFocus(c, required('id'), 'archived'); break;
+        default: throw new Error('Unknown focus operation');
+      }
+      break;
+    }
     case 'hook': result = await hook(c, JSON.parse(await boundedInput(process.stdin))); break;
     case 'record': result = { id: await record(c, required('project'), await readJson(resolve(required('input'))), values.parent) }; break;
     case 'drain': result = await drain(c, Number(values.limit ?? '1')); if ((result as { state: string }[]).some(r => r.state === 'failed')) process.exitCode ||= 1; break;

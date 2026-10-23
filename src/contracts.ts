@@ -19,6 +19,7 @@ export const Evidence = z.object({
   summary: z.string().min(1).max(12000),
   source: z.string().min(1).max(2000),
 }).strict();
+export const FocusId = z.string().regex(/^[a-zA-Z0-9_-]+$/).max(80);
 export const Candidate = z.object({
   title: z.string().min(1).max(160),
   project: z.string().min(1).max(100),
@@ -28,6 +29,7 @@ export const Candidate = z.object({
   rationale: z.string().min(1).max(4000),
   acceptance: z.string().min(1).max(4000),
   nextStep: z.string().min(1).max(2000),
+  focusIds: z.array(FocusId).max(8).optional(),
 }).strict();
 export type Finding = z.infer<typeof Candidate>;
 export const Extraction = z.object({
@@ -63,6 +65,7 @@ export const Task = z.object({
   candidate: Candidate,
   eventIds: z.array(z.string()),
   parentBeads: z.array(z.string()),
+  focusRuns: z.array(z.object({ eventId: z.string(), revision: z.string().regex(/^[a-f0-9]{64}$/), matchedIds: z.array(FocusId).max(8) }).strict()).default([]),
   status: z.enum(['proposed', 'accepting', 'accepted', 'rejected']),
   createdAt: z.string(),
   beadId: z.string().optional(),
