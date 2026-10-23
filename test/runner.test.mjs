@@ -86,18 +86,18 @@ test('CLI termination stops an active extractor and releases its operation lock'
   const settings = JSON.parse(await readFile(config, 'utf8')); settings.codexBinary = fake; await atomicJson(config, settings);
   await record(c, 'app', evidence);
   const child = spawn(process.execPath, [join(import.meta.dirname, '../dist/cli.js'), 'watch', '--config', config, '--max-cycles', '2', '--max-events', '2'], { env: { ...process.env, EXTRACTOR_MARKER: marker }, stdio: ['ignore', 'pipe', 'pipe'] });
-  let output = ''; child.stdout.on('data', b => { output += b; }); child.stderr.resume();
+  let output = '', stderr = ''; child.stdout.on('data', b => { output += b; }); child.stderr.on('data', b => { stderr += b; });
   const closed = new Promise((resolve, reject) => { child.on('error', reject); child.on('close', (code, signal) => resolve({ code, signal })); });
   t.after(async () => {
     if (child.exitCode === null) child.kill('SIGKILL');
     try { process.kill(-Number(await readFile(marker, 'utf8')), 'SIGKILL'); } catch { /* process group already stopped */ }
   });
   let pid;
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 500 && child.exitCode === null; i++) {
     try { pid = Number(await readFile(marker, 'utf8')); if (pid) break; } catch { /* wait for controlled subprocess */ }
     await delay(10);
   }
-  assert.ok(pid, 'controlled extractor started'); child.kill('SIGTERM');
+  assert.ok(pid, `controlled extractor started: ${stderr}`); child.kill('SIGTERM');
   assert.deepEqual(await closed, { code: 143, signal: null });
   assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH');
   assert.equal((await status(c)).queue.failed, 1); assert.equal((await status(c)).operationLock.present, false);

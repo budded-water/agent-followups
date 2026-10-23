@@ -67,3 +67,19 @@ test('starter directions fit context budget and history tampering cannot rewrite
  const {FocusDocument}=await import('../dist/focus.js');const sample=FocusDocument.parse(JSON.parse(await readFile(join(import.meta.dirname,'../examples/focus.json'),'utf8')));assert.equal(sample.directions.filter(d=>d.status==='active').length,6);
  const {c}=await fixture(t);const first=await setFocus(c,{version:1,directions:[direction]});const path=join(c.stateDir,'focus-history',first.revision+'.json');await atomicJson(path,{version:1,directions:[{...direction,question:'tampered'}]});await assert.rejects(readFocus(c,first.revision),/hash mismatch/);await assert.rejects(setFocus(c,{version:1,directions:[direction]}),/hash mismatch/);assert.equal((await readFocus(c)).revision,first.revision);
 });
+
+test('removed target projects remain inspectable but cannot create external tasks',async t=>{
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);c.projects=c.projects.filter(p=>p.id!=='app');const {accept}=await import('../dist/workflow.js');let calls=0;
+ await assert.rejects(accept(c,task.id,async()=>{calls++;return '[]';}),/no longer configured/);assert.equal(calls,0);assert.equal((await proposals(c))[0].status,'proposed');
+});
+test('mismatched restored proposal IDs cannot mutate local state or call Beads',async t=>{
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);const path=join(c.stateDir,'proposals',task.id+'.json');const wrong={...task,id:'f'.repeat(64)};await atomicJson(path,wrong);const before=await readFile(path,'utf8');const {accept,reconcile}=await import('../dist/workflow.js');let calls=0;const beads=async()=>{calls++;return '[]';};
+ await assert.rejects(accept(c,task.id,beads),/identity mismatch/);await assert.rejects(reject(c,task.id,'wrong restore'),/identity mismatch/);assert.equal(await readFile(path,'utf8'),before);
+ await atomicJson(path,{...wrong,status:'accepting'});await assert.rejects(reconcile(c,task.id,'existing',beads),/identity mismatch/);assert.equal(calls,0);
+ await record(c,'app',[{...evidence[0],source:'duplicate'}]);assert.equal((await drain(c,1,output([{...candidate,focusIds:[]}])))[0].state,'failed');assert.equal(JSON.parse(await readFile(path,'utf8')).id,wrong.id);
+});
+test('duplicate provenance crossing the read bound cannot replace a readable proposal',async t=>{
+ const {c}=await fixture(t);await record(c,'app',evidence);await drain(c,1,output([{...candidate,focusIds:[]}]));const [task]=await proposals(c);const {MAX_JSON_BYTES}=await import('../dist/io.js');const bytes=v=>Buffer.byteLength(JSON.stringify(v,null,2)+'\n');const base=bytes(task);const unit=bytes({...task,eventIds:[...task.eventIds,'0'.repeat(64)]})-base;
+ const n=Math.floor((MAX_JSON_BYTES-base-80)/unit);task.eventIds.push(...Array.from({length:n},(_,i)=>i.toString(16).padStart(64,'0')));const path=join(c.stateDir,'proposals',task.id+'.json');await atomicJson(path,task);const before=await readFile(path,'utf8');assert.ok(Buffer.byteLength(before)>MAX_JSON_BYTES-200);
+ await record(c,'app',[{...evidence[0],source:'one-more'}]);assert.equal((await drain(c,1,output([{...candidate,focusIds:[]}])))[0].state,'failed');assert.equal(await readFile(path,'utf8'),before);assert.equal((await proposals(c))[0].id,task.id);
+});

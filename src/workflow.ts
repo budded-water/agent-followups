@@ -9,6 +9,11 @@ import { activeFocus, focusContext, validateMatches, type Focus } from './focus.
 const now = () => new Date().toISOString();
 const eventPath = (c: Settings, id: string) => join(c.stateDir, 'events', `${validId(id)}.json`);
 const taskPath = (c: Settings, id: string) => join(c.stateDir, 'proposals', `${validId(id)}.json`);
+async function readTask(c: Settings, id: string) {
+  const task = Task.parse(await readJson(taskPath(c, id)));
+  if (task.id !== id) throw new Error('Proposal identity mismatch');
+  return task;
+}
 function validId(id: string) { if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('Invalid record ID'); return id; }
 export async function records(c: Settings, dir: string) {
   const path = join(c.stateDir, dir); await privateDir(path);
@@ -109,7 +114,7 @@ async function saveCandidates(c: Settings, event: WorkEvent, findings: Finding[]
     const focusRun = focus ? [{ eventId: event.id, revision: focus.revision, matchedIds: f.focusIds ?? [] }] : [];
     const id = candidateId(f); const path = taskPath(c, id);
     if (await exists(path)) {
-      const previous = Task.parse(await readJson(path));
+      const previous = await readTask(c, id);
       previous.eventIds = [...new Set([...previous.eventIds, event.id])];
       previous.parentBeads = [...new Set([...previous.parentBeads, ...(event.parentBead ? [event.parentBead] : [])])];
       for (const run of focusRun) if (!previous.focusRuns.some(r => hash(r) === hash(run))) previous.focusRuns.push(run);
@@ -216,9 +221,10 @@ async function beadsCommand(c: Settings, args: string[], exec: Command) {
 }
 export async function accept(c: Settings, id: string, exec: Command = command) {
   return withLock(c, async () => {
-    const path = taskPath(c, id); const task = Task.parse(await readJson(path));
+    const path = taskPath(c, id); const task = await readTask(c, id);
     if (task.status === 'accepted') return task;
     if (task.status !== 'proposed') throw new Error('Proposal cannot be accepted: reconcile an interrupted write or use another proposed task');
+    if (!c.projects.some(p => p.id === task.candidate.project)) throw new Error('Proposal target is no longer configured');
     const existing = z.array(z.object({ id: z.string(), title: z.string(), description: z.string().optional(), labels: z.array(z.string()).optional() })).parse(JSON.parse(await beadsCommand(c, ['list', '--all', '--limit', '0', '--json'], exec)));
     if (existing.some(b => {
       if (b.description?.includes(`agent-followups:${id}`)) return true;
@@ -242,7 +248,7 @@ export async function accept(c: Settings, id: string, exec: Command = command) {
 export async function reconcile(c: Settings, id: string, bead: string, exec: Command = command) {
   if (!/^[a-zA-Z0-9_.-]+$/.test(bead)) throw new Error('Invalid Beads ID');
   return withLock(c, async () => {
-    const path = taskPath(c, id); const task = Task.parse(await readJson(path));
+    const path = taskPath(c, id); const task = await readTask(c, id);
     if (task.status !== 'accepting') throw new Error('Only an interrupted acceptance can be reconciled');
     const raw: unknown = JSON.parse(await beadsCommand(c, ['show', bead, '--json'], exec));
     const value = z.object({ id: z.string(), description: z.string() }).parse(Array.isArray(raw) ? raw[0] : raw);
@@ -253,7 +259,7 @@ export async function reconcile(c: Settings, id: string, bead: string, exec: Com
 export async function reject(c: Settings, id: string, reason: string) {
   if (!reason.trim()) throw new Error('A rejection reason is required');
   return withLock(c, async () => {
-    const path = taskPath(c, id); const task = Task.parse(await readJson(path));
+    const path = taskPath(c, id); const task = await readTask(c, id);
     if (task.status !== 'proposed') throw new Error('Only proposed tasks can be rejected');
     task.status = 'rejected'; task.reason = reason; await atomicJson(path, task); return task;
   });

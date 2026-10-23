@@ -44,3 +44,9 @@ Each proposal retains analysis associations as focusRuns: event ID, full directi
 For UI-eval, speed requires measured stage duration or repeated-operation traces; efficiency requires scenario scope/intervention records; accuracy requires an automated result plus independent counterevidence. Link canonical UI-eval runs rather than copying acceptance claims. Establish actual baselines and agreed targets before judging improvement. No numerical target is invented by the template.
 
 Several empty extraction results are a review signal, not evidence that a direction is resolved. Review representative runs and canonical acceptance evidence, then explicitly pause or archive the direction. Existing proposals, Beads tasks and history remain available. Replace a direction when the next period's priorities change; do not rewrite its old meaning under an old revision.
+
+## Storage and import guards
+
+JSON writes are checked against the same byte limit as reads before publication. If duplicate provenance would exceed that limit, the analysis fails while preserving the previous readable proposal; original events and the failed check remain available for operator recovery. Associations are never silently truncated. This prototype does not shard provenance automatically.
+
+A restored proposal must have an internal ID matching its filename before duplicate updates, decisions, imports or reconciliation. New Beads imports also revalidate the target against the current project allowlist. Removing a project does not erase its historical proposals, but prevents new imports for it. Existing unknown-write reconciliation remains an identity-checked recovery operation, not a new task creation.

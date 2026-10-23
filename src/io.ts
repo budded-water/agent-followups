@@ -4,6 +4,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path';
 import { Config, type Settings } from './contracts.js';
 
+export const MAX_JSON_BYTES = 2 * 1024 * 1024;
+function jsonText(value: unknown) {
+  const text = JSON.stringify(value, null, 2) + '\n';
+  if (Buffer.byteLength(text, 'utf8') > MAX_JSON_BYTES) throw new Error('JSON write exceeded read limit');
+  return text;
+}
 export const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export async function privateDir(path: string) {
   await mkdir(path, { recursive: true, mode: 0o700 });
@@ -13,24 +19,26 @@ export async function privateDir(path: string) {
 }
 export async function atomicJson(path: string, value: unknown) {
   await privateDir(dirname(path));
+  const text = jsonText(value);
   const temp = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+    await writeFile(temp, text, { mode: 0o600, flag: 'wx' });
     await rename(temp, path);
   } finally { await rm(temp, { force: true }); }
 }
 export async function createJson(path: string, value: unknown) {
   await privateDir(dirname(path));
+  const text = jsonText(value);
   const temp = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+    await writeFile(temp, text, { mode: 0o600, flag: 'wx' });
     try { await link(temp, path); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e; }
   } finally { await rm(temp, { force: true }); }
 }
 export async function readJson(path: string) {
   const file = await open(path, 'r');
   try {
-    if ((await file.stat()).size > 2 * 1024 * 1024) throw new Error('JSON file exceeded limit');
+    if ((await file.stat()).size > MAX_JSON_BYTES) throw new Error('JSON file exceeded limit');
     return JSON.parse(await file.readFile('utf8')) as unknown;
   } finally { await file.close(); }
 }

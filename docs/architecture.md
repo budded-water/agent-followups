@@ -35,3 +35,5 @@ Event IDs hash sanitized input. Proposal IDs hash normalized title and target pr
 ## Focus ownership
 
 The private focus store owns current observation priorities and immutable historical definitions. [Focus directions](focus-directions.md) owns the definition, lifecycle and attribution contract. SessionStart and extraction read applicable active directions; existing sessions require explicit refresh. Proposal focusRuns are provenance, not independent task status. Pausing directions cannot close tasks or erase earlier findings.
+
+Storage-integrity and current-project import guards are documented in [focus storage and import guards](focus-directions.md#storage-and-import-guards) and apply across the private store.
