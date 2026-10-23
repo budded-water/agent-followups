@@ -24,20 +24,22 @@ Coding session → hook / explicit evidence → durable event queue
 
 ## Requirements and installation
 
-- Node.js 24+ and npm.
+- Node.js 24+ and the pnpm version pinned in `package.json`.
 - An authenticated Codex CLI with `exec --ignore-user-config`, `--ephemeral`, `--output-schema` and `--output-last-message` support. Development targets Codex CLI 0.160.1; check your installed CLI before use.
 - Beads CLI; the integration targets the v1.3.1 command contract. Initialize an external planning workspace separately. Embedded Beads needs no separate Dolt CLI; concurrent writers require appropriate Beads coordination/server configuration.
 
 ```sh
 git clone https://github.com/budded-water/agent-followups.git
 cd agent-followups
-npm ci
-npm run check
-npm link
+pnpm install --frozen-lockfile
+pnpm run check
+pnpm add --global .
 agent-followups --help
 ```
 
 The CLI has one runtime npm dependency, Zod. TypeScript is compiled at build time. No native database package, Redis, agent SDK, Gas Town or web server is required. This project is not published to the npm registry by this workflow.
+
+Use `pnpm-lock.yaml` as the only dependency lockfile. pnpm reuses dependency files across projects through its shared content-addressable store. Check `pnpm store path` if an installation reports a store inside the project; restricted environments may need explicit access to a shared store. Repository changes do not upgrade a separately pinned installed CLI or collector.
 
 ## Configure explicit project access
 
@@ -138,7 +140,7 @@ Acceptance creates a task with evidence, acceptance criteria, next step, project
 
 ## Validation scope
 
-`npm run check` builds TypeScript and runs behavioral tests with isolated directories and fake external commands. The suite covers queue idempotence, hook filtering, opt-in prompt collection, output validation, duplicate proposals, explicit retry, lock exclusion, uncertain Beads writes and reconciliation. Tests do not certify installed Codex hook trust, real model quality, concurrent Beads writers, simulator acceptance or store release readiness. See [architecture](docs/architecture.md) and [validation](docs/validation.md).
+`pnpm run check` builds TypeScript and runs behavioral tests with isolated directories and fake external commands. The suite covers queue idempotence, hook filtering, opt-in prompt collection, output validation, duplicate proposals, explicit retry, lock exclusion, uncertain Beads writes and reconciliation. Tests do not certify installed Codex hook trust, real model quality, concurrent Beads writers, simulator acceptance or store release readiness. See [architecture](docs/architecture.md) and [validation](docs/validation.md).
 
 ## License
 
