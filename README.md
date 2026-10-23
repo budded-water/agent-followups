@@ -106,6 +106,16 @@ agent-followups reject --config /absolute/private/followups.json \
   --id PROPOSAL_ID --reason "Already tracked or not worth pursuing"
 ```
 
+Inspect the queue without starting analysis:
+
+```sh
+agent-followups status --config /absolute/private/followups.json
+```
+
+`status` returns a best-effort JSON snapshot of pending/running/failed/succeeded events, invalid event or receipt records, proposal/import receipt counts, the oldest pending event, latest successful analysis, latest captured hook event and lock presence. It does not call Codex or Beads, change records, acquire/remove a lock, retry analysis or repair corruption. An existing lock does not prove a live worker; a `running` receipt may survive a crash. Accepted proposal counts describe import provenance, not current Beads task status. Only recognized record filenames are counted; unreferenced receipts are not included. Concurrent writes/retries can make a snapshot temporarily inconsistent. The shared config loader may initialize the private state root, but status does not create queue directories.
+
+A recent hook event is evidence of collection, not proof that every hook is trusted or that the runner is scheduled. Review `/hooks` and test actual lifecycle paths separately. No pending events does not prove that collection is working. Use explicit `retry` or `reconcile` after inspecting failures; status never applies recovery automatically.
+
 `drain` handles 1–20 unchecked events per invocation (default 1). Each eligible event gets one isolated Codex extraction, at most five proposals, a timeout, bounded command output and schema validation. User configuration is ignored; hooks, shell tools, multi-agent and app defaults are disabled; web search is disabled; the sandbox is read-only with approval policy `never`. It runs from a private analysis directory, not the business checkout. Managed system policies may affect available tools; validate your environment. Extracted content is untrusted and creates no external task until acceptance.
 
 A successful `no_findings` check is distinct from failure. Repeated event payloads are idempotent. Normalized title + target project deduplicates local proposals; repeated findings preserve reviewed content/state and append event references. This is conservative exact normalization, not semantic deduplication. Review Beads for related work before acceptance. Acceptance additionally checks existing Beads titles within the target project and global import markers before creation; matching unscoped legacy titles require manual review; that preflight is not a transaction across other independent writers.

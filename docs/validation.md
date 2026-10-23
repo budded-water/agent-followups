@@ -22,3 +22,5 @@ Measure observed hook collection coverage, extraction failures, useful accepted 
 ## Initial development observations
 
 On 2026-10-23, a macOS arm64 synthetic run used the real Codex CLI 0.160.1 with the restricted extraction configuration and Beads v1.3.1 in a temporary planning workspace. Extraction returned one proposal; explicit acceptance created a Beads task with its acceptance field and native discovery-parent relation. This establishes that limited external CLI path, not model recall, actual user-scoped hook delivery, a background service, product UI acceptance or any release operation. The automated suite uses fakes so CI requires neither credentials nor those CLIs.
+
+For queue visibility, test an empty store, CLI JSON output, pending/running/failed/succeeded events (including no findings), malformed receipts/proposals, unknown import intents, and status reads while another operation owns the lock. Assert private evidence is absent from the summary and records/locks are preserved. Status output alone does not establish hook trust, worker scheduling, process liveness or current Beads task status.

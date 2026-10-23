@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { loadConfig, boundedInput, readJson } from './io.js';
-import { hook, hookConfig, record, drain, proposals, accept, reject, reconcile, retry, exportMarkdown } from './workflow.js';
+import { hook, hookConfig, record, drain, status, proposals, accept, reject, reconcile, retry, exportMarkdown } from './workflow.js';
 
 const help = `agent-followups <command> --config /absolute/config.json
 
@@ -11,6 +11,7 @@ const help = `agent-followups <command> --config /absolute/config.json
   hook                        Read one Codex hook payload from stdin; enqueue only
   record --project ID --input /path/evidence.json [--parent BEAD]
   drain [--limit 1]            Analyze queued evidence with isolated read-only Codex
+  status                      Inspect queue, proposal receipts and lock (no model calls)
   list                        List local proposals; accepted task status lives in Beads
   accept --id ID              Explicitly create one Beads task (no execution)
   reject --id ID --reason TEXT
@@ -36,6 +37,7 @@ async function main() {
     case 'hook': result = await hook(c, JSON.parse(await boundedInput(process.stdin))); break;
     case 'record': result = { id: await record(c, required('project'), await readJson(resolve(required('input'))), values.parent) }; break;
     case 'drain': result = await drain(c, Number(values.limit ?? '1')); if ((result as { state: string }[]).some(r => r.state === 'failed')) process.exitCode ||= 1; break;
+    case 'status': result = await status(c); break;
     case 'list': result = await proposals(c); break;
     case 'accept': result = await accept(c, required('id')); break;
     case 'reject': result = await reject(c, required('id'), required('reason')); break;

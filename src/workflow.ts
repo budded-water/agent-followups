@@ -44,6 +44,53 @@ export async function hook(c: Settings, input: unknown) {
   await enqueue(c, { project: p.id, session, ...(h.turn_id ? { turn: h.turn_id } : {}), kind: h.hook_event_name, evidence });
   return {};
 }
+// A status read never acquires/removes the worker lock or changes task records.
+// Hooks and workers may write concurrently, so these counters are a best-effort snapshot.
+export async function status(c: Settings) {
+  const queue = { pending: 0, running: 0, failed: 0, succeeded: 0, invalid: 0 };
+  const proposalCounts = { proposed: 0, accepting: 0, accepted: 0, rejected: 0, invalid: 0 };
+  let oldestPendingAt: string | null = null, lastSuccessfulAnalysisAt: string | null = null;
+  let lastHookEventAt: string | null = null;
+  const timestamp = (value: string) => Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+  const latest = (previous: string | null, value: string | null) => value && (!previous || value > previous) ? value : previous;
+  const files = async (dir: string) => {
+    try { return (await readdir(join(c.stateDir, dir))).filter(n => /^[a-f0-9]{64}\.json$/.test(n)).sort(); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+  };
+  const Receipt = z.discriminatedUnion('state', [
+    z.object({ state: z.literal('running'), eventId: z.string(), startedAt: z.string() }),
+    z.object({ state: z.literal('failed'), finishedAt: z.string() }),
+    z.object({ state: z.literal('succeeded'), outcome: z.enum(['candidates_found', 'no_findings']), finishedAt: z.string() }),
+  ]);
+  for (const file of await files('events')) {
+    try {
+      const event = Event.parse(await readJson(join(c.stateDir, 'events', file)));
+      if (`${event.id}.json` !== file) throw new Error('Event ID mismatch');
+      if (event.kind !== 'manual') lastHookEventAt = latest(lastHookEventAt, timestamp(event.createdAt));
+      const receiptPath = join(c.stateDir, 'checks', file);
+      if (!await exists(receiptPath)) {
+        queue.pending++;
+        const at = timestamp(event.createdAt);
+        if (at && (!oldestPendingAt || at < oldestPendingAt)) oldestPendingAt = at;
+      } else {
+        const receipt = Receipt.parse(await readJson(receiptPath));
+        if (receipt.state === 'running' && receipt.eventId !== event.id) throw new Error('Receipt ID mismatch');
+        queue[receipt.state]++;
+        if (receipt.state === 'succeeded') lastSuccessfulAnalysisAt = latest(lastSuccessfulAnalysisAt, timestamp(receipt.finishedAt));
+      }
+    } catch { queue.invalid++; }
+  }
+  for (const file of await files('proposals')) {
+    try {
+      const task = Task.parse(await readJson(join(c.stateDir, 'proposals', file)));
+      if (`${task.id}.json` !== file) throw new Error('Proposal ID mismatch');
+      proposalCounts[task.status]++;
+    } catch { proposalCounts.invalid++; }
+  }
+  return { version: 1, observedAt: now(), snapshot: 'best-effort', queue, proposals: proposalCounts,
+    oldestPendingAt, lastSuccessfulAnalysisAt, lastHookEventAt,
+    operationLock: { present: await exists(join(c.stateDir, 'operation.lock')) } };
+}
 export async function record(c: Settings, project: string, evidence: unknown, parentBead?: string) {
   if (!c.projects.some(p => p.id === project)) throw new Error('Unknown project');
   return enqueue(c, { project, session: 'manual', kind: 'manual', evidence: z.array(Candidate.shape.evidence.element).min(1).max(10).parse(evidence), ...(parentBead ? { parentBead } : {}) });

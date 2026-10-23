@@ -175,3 +175,57 @@ test('Beads subprocess cannot inherit database redirection or auto-push mode', a
     });
   } finally { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
 });
+
+test('status on an empty store creates no queue directories and CLI returns only a summary', async t => {
+  const { c, config } = await fixture(t);
+  const { status } = await import('../dist/workflow.js');
+  const { readdir } = await import('node:fs/promises');
+  assert.deepEqual(await readdir(c.stateDir), []);
+  const s = await status(c);
+  assert.deepEqual(s.queue, { pending: 0, running: 0, failed: 0, succeeded: 0, invalid: 0 });
+  assert.equal(s.lastHookEventAt, null); assert.equal(s.lastSuccessfulAnalysisAt, null);
+  assert.equal(s.operationLock.present, false);
+  const cli = await command(process.execPath, [join(import.meta.dirname, '../dist/cli.js'), 'status', '--config', config], { cwd: tmpdir() });
+  assert.equal(JSON.parse(cli).snapshot, 'best-effort');
+  assert.deepEqual(await readdir(c.stateDir), []);
+});
+
+test('status distinguishes pending, running, failure, no findings and corrupt records without exposing evidence', async t => {
+  const { c, repo } = await fixture(t);
+  const { status } = await import('../dist/workflow.js');
+  const pending = await record(c, 'app', [{ summary: 'private-pending-evidence', source: 'pending' }]);
+  await hook(c, { hook_event_name: 'SessionEnd', session_id: 'private-session', cwd: repo });
+  const successful = await drain(c, 20, extractor({ outcome: 'no_findings', candidates: [] }));
+  assert.equal(successful.length, 2);
+  const waiting = await record(c, 'app', [{ summary: 'private-pending-evidence', source: 'waiting' }]);
+  const failed = await record(c, 'app', [{ summary: 'private-failure-evidence', source: 'failure' }]);
+  await atomicJson(join(c.stateDir, 'checks', `${failed}.json`), { state: 'failed', finishedAt: new Date().toISOString() });
+  const running = await record(c, 'app', [{ summary: 'private-running-evidence', source: 'running' }]);
+  await atomicJson(join(c.stateDir, 'checks', `${running}.json`), { state: 'running', eventId: running, startedAt: new Date().toISOString() });
+  const corrupt = await record(c, 'app', [{ summary: 'private-corrupt-evidence', source: 'corrupt' }]);
+  await writeFile(join(c.stateDir, 'checks', `${corrupt}.json`), '{');
+  await withLock(c, async () => {
+    const s = await status(c);
+    assert.deepEqual(s.queue, { pending: 1, running: 1, failed: 1, succeeded: 2, invalid: 1 });
+    assert.equal(s.oldestPendingAt, JSON.parse(await readFile(join(c.stateDir, 'events', `${waiting}.json`), 'utf8')).createdAt);
+    assert.ok(s.lastHookEventAt); assert.ok(s.lastSuccessfulAnalysisAt); assert.equal(s.operationLock.present, true);
+    assert.ok(!JSON.stringify(s).includes('private-'));
+    assert.equal(JSON.parse(await readFile(join(c.stateDir, 'checks', `${pending}.json`), 'utf8')).state, 'succeeded');
+    await assert.rejects(withLock(c, async () => {}), /owns the state lock/);
+  });
+  assert.equal(await readFile(join(c.stateDir, 'checks', `${corrupt}.json`), 'utf8'), '{');
+});
+
+test('status reports unresolved import intents and accepted provenance without querying or changing Beads', async t => {
+  const { c, task } = await propose(t);
+  const { status } = await import('../dist/workflow.js');
+  const original = await readFile(join(c.stateDir, 'proposals', `${task.id}.json`), 'utf8');
+  assert.equal((await status(c)).proposals.proposed, 1);
+  assert.equal(await readFile(join(c.stateDir, 'proposals', `${task.id}.json`), 'utf8'), original);
+  await assert.rejects(accept(c, task.id, async (b, a) => { if (a[0] === 'list') return '[]'; throw new Error('unknown write'); }));
+  assert.equal((await status(c)).proposals.accepting, 1);
+  await reconcile(c, task.id, 'existing-1', async () => JSON.stringify([{ id: 'existing-1', description: `agent-followups:${task.id}` }]));
+  const imported = await status(c); assert.equal(imported.proposals.accepted, 1); assert.equal(imported.proposals.accepting, 0);
+  await writeFile(join(c.stateDir, 'proposals', `${'f'.repeat(64)}.json`), '{}');
+  assert.equal((await status(c)).proposals.invalid, 1);
+});

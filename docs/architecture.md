@@ -23,3 +23,7 @@ UI-eval owns scenario execution, verification plans and evidence reconciliation.
 ## Deduplication
 
 Event IDs hash sanitized input. Proposal IDs hash normalized title and target project. The latter intentionally avoids an additional model call: it is deterministic but misses differently worded duplicates. Acceptance inspects same-project Beads titles and global import markers; unscoped matching titles require manual duplicate review; independent external writers can race this preflight. One runner/state store per planning workflow is the supported deployment. Semantic duplicate review remains an operator responsibility.
+
+## Queue visibility
+
+`status` inspects immutable events, their analysis receipts and proposal/import receipts without provider calls or repair. It reports a best-effort snapshot because hook writers and explicit recovery may run concurrently. Lock presence and running receipts do not attest process liveness. Hook timestamps do not attest trust or complete lifecycle coverage. Beads retains canonical imported task status; status counts accepted import receipts only. Unreadable/invalid recognized records are counted separately rather than reported as empty or successful.
