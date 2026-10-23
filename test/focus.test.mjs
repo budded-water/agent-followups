@@ -128,3 +128,10 @@ test('compacted unknown imports retain native parents and chained provenance thr
  updated.status='accepting';await atomicJson(path,fill(updated));const second=await reconcile(c,initial.id,'existing-1',show);assert.notEqual(second.provenanceArchive,archive1);const archived=JSON.parse(await readFile(join(c.stateDir,'provenance-archives',initial.id+'-'+second.provenanceArchive+'.json'),'utf8'));assert.equal(archived.provenanceArchive,archive1);assert.equal(archived.focusRuns.length,1);
  await accept(c,initial.id,async()=>{creates++;throw new Error('no repeat');});assert.equal(creates,1);
 });
+
+test('opt-in prompts cannot cross project boundaries or attach unattributed legacy context',async t=>{
+ const {c,app,other}=await fixture(t);c.capturePrompts=true;const {hash}=await import('../dist/io.js');await hook(c,{hook_event_name:'UserPromptSubmit',session_id:'cross',cwd:app,prompt:'SECRET_A_PROMPT'});
+ await atomicJson(join(c.stateDir,'prompts',hash('cross')+'.json'),{prompt:'LEGACY_SECRET'});await atomicJson(join(c.stateDir,'prompts',hash(['other',hash('cross')])+'.json'),{prompt:'UNATTRIBUTED_SECRET'});
+ c.projects=c.projects.filter(p=>p.id==='other');await hook(c,{hook_event_name:'Stop',session_id:'cross',cwd:other,last_assistant_message:'A safe independent observation in other'});
+ const r=await drain(c,1,async(b,a,o)=>{assert.ok(!o.input.includes('SECRET'));assert.ok(o.input.includes('safe independent observation'));return output([])(b,a,o);});assert.equal(r[0].state,'succeeded');
+});

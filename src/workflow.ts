@@ -31,20 +31,22 @@ export async function hook(c: Settings, input: unknown) {
   const h = HookInput.parse(input); const p = await projectAt(c, h.cwd);
   if (!p) return {};
   const session = hash(h.session_id);
+  const promptPath = join(c.stateDir, 'prompts', `${hash([p.id, session])}.json`);
   if (h.hook_event_name === 'SessionStart') return {
     hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext:
       `agent-followups is enabled for ${p.id}. Record concrete independent follow-up evidence; finish required main-task work in the current task. Hooks enqueue observations only. Run the external drain explicitly to analyze; candidate approval does not authorize implementation, merge or publication. Refresh focus explicitly in an existing session with focus context --project ${p.id}.\n${focusContext(await activeFocus(c, p.id))}` },
   };
   if (h.hook_event_name === 'UserPromptSubmit') {
-    if (c.capturePrompts && h.prompt) await atomicJson(join(c.stateDir, 'prompts', `${session}.json`), { prompt: h.prompt.slice(0, 12000) });
+    if (c.capturePrompts && h.prompt) await atomicJson(promptPath, { project: p.id, prompt: h.prompt.slice(0, 12000) });
     return {};
   }
   if (h.stop_hook_active) return {};
   const evidence: z.infer<typeof Candidate>['evidence'] = [];
   if (h.last_assistant_message?.trim()) evidence.push({ source: 'assistant-message (unverified observation)', summary: h.last_assistant_message.slice(0, 12000) });
-  if (c.capturePrompts && await exists(join(c.stateDir, 'prompts', `${session}.json`))) {
-    const previous = z.object({ prompt: z.string().max(12000) }).parse(await readJson(join(c.stateDir, 'prompts', `${session}.json`)));
-    evidence.push({ source: 'user-prompt (task context)', summary: previous.prompt });
+  if (c.capturePrompts && await exists(promptPath)) {
+    const previous = z.object({ project: z.string(), prompt: z.string().max(12000) }).safeParse(await readJson(promptPath));
+    // Legacy/unattributed or incorrectly restored prompt context is never attached.
+    if (previous.success && previous.data.project === p.id) evidence.push({ source: 'user-prompt (task context)', summary: previous.data.prompt });
   }
   // Interrupted/end events have no assumed semantic result; keep a durable marker.
   if (!evidence.length && h.hook_event_name === 'Stop') return {};
