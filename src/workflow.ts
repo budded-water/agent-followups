@@ -1,11 +1,14 @@
 import { requireCurrentReview, proposalReview } from './review.js';
-import { readdir, rm, link } from 'node:fs/promises';
+import { readdir, rm, link, stat } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { Candidate, Event, Extraction, HookInput, Task, type Settings, type WorkEvent, type Finding } from './contracts.js';
 import { hash, jsonSize, MAX_JSON_BYTES, privateDir, atomicJson, createJson, readJson, exists, projectAt, withLock, command, type Command } from './io.js';
 
 import { activeFocus, focusContext, validateMatches, type Focus } from './focus.js';
+import { readPublication, savePublication } from './publication.js';
+import { jsonObjectArray } from './json-array.js';
 
 const now = () => new Date().toISOString();
 const eventPath = (c: Settings, id: string) => join(c.stateDir, 'events', `${validId(id)}.json`);
@@ -19,6 +22,20 @@ function validId(id: string) { if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('
 export async function records(c: Settings, dir: string) {
   const path = join(c.stateDir, dir); await privateDir(path);
   return (await readdir(path)).filter(n => /^[a-f0-9]{64}\.json$/.test(n)).sort();
+}
+async function pendingEvents(c: Settings) {
+  const pending: { file: string; time: number }[] = [];
+  for (const file of await records(c, 'events')) {
+    if (await exists(join(c.stateDir, 'checks', file))) continue;
+    const path = join(c.stateDir, 'events', file);
+    let time = NaN;
+    try { time = Date.parse(Event.parse(await readJson(path)).createdAt); } catch { /* process corrupt inputs too */ }
+    if (!Number.isFinite(time)) {
+      try { time = (await stat(path)).mtimeMs; } catch { time = 0; }
+    }
+    pending.push({ file, time });
+  }
+  return pending.sort((a, b) => a.time - b.time || a.file.localeCompare(b.file)).map(p => p.file);
 }
 export async function enqueue(c: Settings, data: Omit<WorkEvent, 'id' | 'createdAt' | 'version'>) {
   const id = hash(data); const path = eventPath(c, id);
@@ -98,6 +115,7 @@ export async function status(c: Settings) {
     } catch { proposalCounts.invalid++; }
   }
   return { version: 1, observedAt: now(), snapshot: 'best-effort', queue, proposals: proposalCounts,
+    unavailableProjects: (c.unavailableProjects ?? []).map(({ id, reason }) => ({ id, reason })),
     oldestPendingAt, lastSuccessfulAnalysisAt, lastHookEventAt,
     operationLock: { present: await exists(join(c.stateDir, 'operation.lock')) } };
 }
@@ -142,10 +160,13 @@ export function extractionPrompt(c: Settings, event: WorkEvent, focus?: Focus) {
     (focus ? `CURRENT OBSERVATION FOCUS:\n${focusContext(focus)}\nReturn focusIds matching only active directions applicable to the candidate target project; use [] when unmatched. Useful independent findings outside focus remain allowed. No tools may be used to satisfy evidence requirements.\n` : '') +
     `OBSERVATIONS:\n${JSON.stringify(event)}\n`;
 }
-export async function extract(c: Settings, event: WorkEvent, exec: Command = command, signal?: AbortSignal, focus?: Focus) {
+export async function extract(c: Settings, event: WorkEvent, exec: Command = command, signal?: AbortSignal, focus?: Focus, attempt: string = randomUUID()) {
   signal?.throwIfAborted();
-  const directory = join(c.stateDir, 'runs', event.id); await privateDir(directory);
-  const output = join(directory, 'output.json'); await rm(output, { force: true });
+  const directory = join(c.stateDir, 'runs', event.id, z.string().uuid().parse(attempt)); await privateDir(directory);
+  const output = join(directory, 'output.json');
+  if (await exists(join(directory, 'input.json')) || await exists(output)) throw new Error('Analysis attempt already exists');
+  const input = extractionPrompt(c, event, focus);
+  await createJson(join(directory, 'input.json'), { event, prompt: input });
   const schema = join(directory, 'schema.json');
   const modelCandidate = focus?.directions.length ? Candidate.extend({ focusIds: Candidate.shape.focusIds.unwrap() }) : Candidate.omit({ focusIds: true });
   if (focus) await atomicJson(join(directory, 'focus.json'), focus);
@@ -159,7 +180,7 @@ export async function extract(c: Settings, event: WorkEvent, exec: Command = com
   await exec(c.codexBinary, ['-a', 'never', 'exec', '--ignore-user-config', '--ephemeral', '--skip-git-repo-check',
     '-s', 'read-only', '-c', 'features.hooks=false', '-c', 'features.multi_agent=false',
     '-c', 'features.shell_tool=false', '-c', 'web_search="disabled"', '-c', 'apps._default.enabled=false', '--output-schema', schema, '-o', output, '-'], {
-    cwd: directory, input: extractionPrompt(c, event, focus), env: { ...process.env, AGENT_FOLLOWUPS_INTERNAL: '1' }, timeoutMs: c.timeoutSeconds * 1000, signal,
+    cwd: directory, input, env: { ...process.env, AGENT_FOLLOWUPS_INTERNAL: '1' }, timeoutMs: c.timeoutSeconds * 1000, signal,
   });
   const result = Extraction.parse(await readJson(output));
   validateMatches(result.candidates, focus ?? { revision: '', directions: [] });
@@ -170,7 +191,7 @@ export async function drain(c: Settings, limit = 1, exec: Command = command, sig
   if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error('limit must be 1..20');
   return withLock(c, async () => {
     const result = [];
-    for (const file of await records(c, 'events')) {
+    for (const file of await pendingEvents(c)) {
       if (result.length >= limit || signal?.aborted || process.exitCode === 130 || process.exitCode === 143) break;
       const id = file.slice(0, -5);
       const receipt = join(c.stateDir, 'checks', file);
@@ -186,15 +207,28 @@ export async function drain(c: Settings, limit = 1, exec: Command = command, sig
         continue;
       }
       if (signal?.aborted) break;
-      await atomicJson(receipt, { state: 'running', eventId: event.id, startedAt: now() });
+      let attempt: string | undefined;
+      let phase = 'extracting';
       try {
-        const focus = await activeFocus(c);
-        const r = event.evidence.length ? await extract(c, event, exec, signal, focus) : { outcome: 'no_findings' as const, candidates: [] };
+        let publication = await readPublication(c, event);
+        attempt = publication?.attempt ?? randomUUID();
+        phase = publication ? 'publishing' : 'extracting';
+        await atomicJson(receipt, { state: 'running', eventId: event.id, attempt, phase, startedAt: now() });
+        if (!publication) {
+          const focus = await activeFocus(c);
+          const r = event.evidence.length ? await extract(c, event, exec, signal, focus, attempt) : { outcome: 'no_findings' as const, candidates: [] };
+          if (r.candidates.some(f => !c.projects.some(p => p.id === f.project))) throw new Error('Unknown candidate project');
+          signal?.throwIfAborted();
+          publication = await savePublication(c, event, attempt, r, focus);
+        }
+        phase = 'publishing';
+        signal?.throwIfAborted();
+        const { result: r, focus } = publication;
         const proposals = await saveCandidates(c, event, r.candidates, focus);
-        const completed = { state: 'succeeded', focusRevision: focus.revision, outcome: r.outcome, proposals, finishedAt: now() };
+        const completed = { state: 'succeeded', attempt, focusRevision: focus.revision, outcome: r.outcome, proposals, finishedAt: now() };
         await atomicJson(receipt, completed); result.push({ id: event.id, ...completed });
       } catch {
-        await atomicJson(receipt, { state: 'failed', error: 'Extraction failed; inspect runtime configuration or run an explicit retry. Raw provider output is not included.', finishedAt: now() });
+        await atomicJson(receipt, { state: 'failed', attempt, phase, error: 'Analysis or publication failed; inspect private attempt artifacts and explicitly retry. Saved publication plans are replayed without another model call.', finishedAt: now() });
         result.push({ id: event.id, state: 'failed' });
       }
     }
@@ -207,6 +241,8 @@ export async function retry(c: Settings, id: string, reason: string) {
     const path = join(c.stateDir, 'checks', `${validId(id)}.json`);
     const value = z.object({ state: z.string() }).passthrough().parse(await readJson(path));
     if (value.state === 'succeeded') throw new Error('A successful check cannot be retried');
+    if (!value.attempt && !await exists(join(c.stateDir, 'runs', id, 'publication.json')) && (await proposals(c)).some(p => p.eventIds.includes(id)))
+      throw new Error('Legacy partial publication requires manual recovery; preserve the original run artifacts');
     await atomicJson(join(c.stateDir, 'recovery', `${id}-${hash(value)}.json`), { previous: value, reason, at: now() });
     await rm(path);
   });
@@ -223,10 +259,10 @@ export function beadDescription(task: z.infer<typeof Task>) {
     '', '## Source events', ...task.eventIds, '', '## Archived provenance', ...(task.provenanceArchive ? [`Private provenance-archives/${task.id}-${task.provenanceArchive}.json; historical snapshot, not current task status.`] : []), '', '## Focus provenance', ...task.focusRuns.map(r => `${r.revision}: ${r.matchedIds.join(', ') || '(unmatched)'}; event ${r.eventId}`), '', '## Discovery parents', ...task.parentBeads,
     '', 'Proposal acceptance does not authorize implementation, merge, publication or declare UI/release acceptance.'].join('\n');
 }
-async function beadsCommand(c: Settings, args: string[], exec: Command, input?: string) {
+async function beadsCommand(c: Settings, args: string[], exec: Command, input?: string, onStdout?: (chunk: Buffer) => void) {
   const env: NodeJS.ProcessEnv = { ...process.env, BEADS_DIR: c.beadsDir };
   delete env.BEADS_DB; delete env.BD_DB;
-  return exec(c.beadsBinary, [...args, '--sandbox'], { cwd: c.beadsDir, env, input, timeoutMs: c.timeoutSeconds * 1000 });
+  return exec(c.beadsBinary, [...args, '--sandbox'], { cwd: c.beadsDir, env, input, onStdout, timeoutMs: c.timeoutSeconds * 1000 });
 }
 const BeadId = z.string().regex(/^[a-zA-Z0-9_.-]+$/).min(1).max(512);
 async function importHeadroom(c: Settings, id: string, task: z.infer<typeof Task>) {
@@ -250,14 +286,21 @@ export async function accept(c: Settings, id: string, exec: Command = command) {
       '--priority', '2', '--labels', `project:${task.candidate.project}`, '--body-file', '-', '--acceptance', task.candidate.acceptance,
       ...(task.parentBeads.length ? ['--deps', task.parentBeads.map(p => `discovered-from:${p}`).join(',')] : []), '--json'];
     if (createArgs.some(a => Buffer.byteLength(a) > 32768) || createArgs.reduce((n, a) => n + Buffer.byteLength(a) + 1, 0) > 65536) throw new Error('Import arguments exceed transport budget');
-    const existing = z.array(z.object({ id: z.string(), title: z.string(), description: z.string().optional(), labels: z.array(z.string()).optional() })).parse(JSON.parse(await beadsCommand(c, ['list', '--all', '--limit', '0', '--json'], exec)));
-    if (existing.some(b => {
-      if (importIdentity(b.description, id)) return true;
+    let duplicate = false;
+    const Bead = z.object({ id: z.string(), title: z.string(), description: z.string().optional(), labels: z.array(z.string()).optional() });
+    const stream = jsonObjectArray(value => {
+      const b = Bead.parse(value);
+      if (importIdentity(b.description, id)) duplicate = true;
       const project = b.labels?.find(label => label.startsWith('project:'))?.slice(8)
         ?? b.description?.match(/^Project: ([a-zA-Z0-9_-]+)$/m)?.[1];
       // Unscoped legacy issues remain a conservative manual duplicate check.
-      return (!project || project === task.candidate.project) && candidateId({ ...task.candidate, title: b.title }) === id;
-    }))
+      if ((!project || project === task.candidate.project) && candidateId({ ...task.candidate, title: b.title }) === id) duplicate = true;
+    });
+    const remaining = await beadsCommand(c, ['list', '--all', '--limit', '0', '--json'], exec, undefined, chunk => stream.push(chunk));
+    // In-process adapters may return their output instead of streaming it.
+    if (remaining) stream.push(Buffer.from(remaining));
+    stream.finish();
+    if (duplicate)
       throw new Error('An existing Beads issue matches this proposal. Reject/link it instead of creating a duplicate.');
     // Check discovery parents before mutation; they must be in this configured Beads store.
     for (const parent of task.parentBeads) await beadsCommand(c, ['show', parent, '--json'], exec);

@@ -8,6 +8,10 @@ The reusable unit is evidence-backed follow-up discovery. Keep it independent fr
 
 Events are content-addressed immutable inputs. Checks transition from absent to running to succeeded or failed. A crash can retain running; an explicit retry archives that receipt and makes the event eligible again. A successful no-findings result is a completed check. Unreadable, invalid or ID-mismatched events receive a failure receipt without changing their original bytes; they consume a drain slot but do not abort unrelated queued work. They require operator repair of the original evidence/access plus explicit retry.
 
+Pending events are selected by creation time, then ID, rather than hash order. Invalid timestamps/records use file mtime with an oldest-priority fallback when stat fails. The pending snapshot is taken per drain; concurrently enqueued events enter the next batch.
+
+Each extraction has an append-only attempt directory with the supplied input/prompt, schema, focus and provider output. Before publishing proposals, an immutable content-address-verified publication plan binds the attempt, exact parsed event, extraction result and original focus snapshot. Retry after publication failure replays this plan and merges associations idempotently; it does not replace existing proposal decisions or call the model again. Failed extraction without a plan uses a fresh attempt. Plan corruption or event-identity drift blocks replay. Legacy partial publications without a plan require manual investigation; old run artifacts are never overwritten. The README owns compatibility and operational recovery steps.
+
 Proposals transition from proposed to rejected or accepting to accepted. The accepting state is written before a Beads create call. An unknown write outcome remains accepting and requires a matching existing Beads task to reconcile. A successful import never repeats creation. Subsequent duplicate observations add provenance without overwriting the original decision or reviewed proposal.
 
 A single operation lock serializes analysis and decisions. Hooks use exclusive create for immutable events and do not acquire that long-lived lock. Atomic JSON writes use a temporary file plus rename. This provides process-level recovery on a local filesystem, not power-loss durability, distributed locking, protection against a same-user attacker, or a transaction with Beads. Back up runtime state and Beads separately.
@@ -24,9 +28,13 @@ UI-eval owns scenario execution, verification plans and evidence reconciliation.
 
 Event IDs hash sanitized input. Proposal IDs hash normalized title and target project. The latter intentionally avoids an additional model call: it is deterministic but misses differently worded duplicates. Acceptance inspects same-project Beads titles and global exact leading-line import markers (body quotations do not establish ownership); unscoped matching titles require manual duplicate review; independent external writers can race this preflight. One runner/state store per planning workflow is the supported deployment. The local `similar` command now provides bounded lexical/evidence-source suggestions, and operators can record duplicate associations. It does not merge candidates or provide general semantic equivalence. [Proposal review](proposal-review.md) owns the review schema, invalidation and import gate.
 
+Preflight consumes the Beads JSON array incrementally, retaining at most one bounded record. It validates the complete stream and successful subprocess exit before writing import intent. Total stdout size is uncapped only for this streaming consumer; per-record size, stderr and timeout limits still fail closed. No new pagination flags or database server mode are required.
+
 ## Queue visibility
 
 `status` inspects immutable events, their analysis receipts and proposal/import receipts without provider calls or repair. It reports a best-effort snapshot because hook writers and explicit recovery may run concurrently. Lock presence and running receipts do not attest process liveness. Hook timestamps do not attest trust or complete lifecycle coverage. Beads retains canonical imported task status; status counts accepted import receipts only. Unreadable/invalid recognized records are counted separately rather than reported as empty or successful.
+
+Project availability is a startup snapshot. Unresolvable/non-directory roots are excluded from authorized operations and reported by ID/reason, while historical state and unknown-write reconciliation remain accessible. Missing nested roots retain a deny boundary to prevent fallback attribution to an authorized ancestor. Configuration syntax, duplicate roots, and state containment/permissions remain installation-wide validation failures.
 
 ## Explicit bounded analysis loop
 
