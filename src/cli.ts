@@ -26,7 +26,7 @@ const help = `agent-followups <command> --config /absolute/config.json
   accept --id ID              Explicitly create one Beads task (no execution)
   reject --id ID --reason TEXT
   reconcile --id ID --bead ID  Attach an existing matching Bead after an unknown write
-  retry --id EVENT --reason TEXT  Explicitly retry failed/interrupted extraction
+  retry --id EVENT --reason TEXT  Retry analysis or replay a saved publication plan
   export                      Write a read-only Markdown view to stdout
 
 No command runs implementation tasks, tests, builds, merges or releases.
@@ -43,6 +43,8 @@ async function main() {
   const required = (key: keyof typeof values) => { const v = values[key]; if (typeof v !== 'string' || !v.trim()) throw new Error(`--${key} is required`); return v; };
   if (operation === 'hooks-json') { console.log(JSON.stringify(hookConfig(required('config'), fileURLToPath(import.meta.url)), null, 2)); return; }
   const c = await loadConfig(required('config'));
+  for (const project of c.unavailableProjects ?? [])
+    console.error(`Project ${project.id} is unavailable (${project.reason}); collection and new imports are disabled for it.`);
   let result: unknown;
   switch (operation) {
     case 'focus': {

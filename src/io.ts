@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, writeFile, rename, link, lstat, realpath, open, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rename, link, lstat, stat, realpath, open, rm } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path';
 import { Config, type Settings } from './contracts.js';
@@ -47,13 +47,33 @@ export async function exists(path: string) {
   try { await lstat(path); return true; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e; }
 }
 const outside = (rel: string) => rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+async function unresolvedRoot(path: string): Promise<string> {
+  // Resolve the nearest accessible ancestor without authorizing the missing subtree.
+  try { return await realpath(path); }
+  catch {
+    const parent = dirname(path);
+    return parent === path ? resolve(path) : join(await unresolvedRoot(parent), path.slice(parent.length));
+  }
+}
 export async function loadConfig(path: string): Promise<Settings> {
-  const c = Config.parse(await readJson(path));
-  c.projects = await Promise.all(c.projects.map(async p => ({ ...p, root: await realpath(p.root) })));
-  if (new Set(c.projects.map(p => p.root)).size !== c.projects.length) throw new Error('Duplicate project roots');
+  const c: Settings = Config.parse(await readJson(path));
+  const projects = await Promise.all(c.projects.map(async p => {
+    try {
+      const root = await realpath(p.root);
+      return { ...p, root, reason: (await stat(root)).isDirectory() ? undefined : 'not_directory' as const };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(code ?? '')) throw error;
+      return { ...p, root: await unresolvedRoot(resolve(p.root)), reason: code === 'ENOENT' ? 'missing' as const : code === 'ENOTDIR' ? 'not_directory' as const : 'inaccessible' as const };
+    }
+  }));
+  if (new Set(projects.map(p => p.root)).size !== projects.length) throw new Error('Duplicate project roots');
+  c.projects = projects.filter(p => !p.reason).map(({ id, root }) => ({ id, root }));
+  const unavailable = projects.flatMap(p => p.reason ? [{ id: p.id, root: p.root, reason: p.reason }] : []);
+  if (unavailable.length) c.unavailableProjects = unavailable;
   await privateDir(c.stateDir);
   c.stateDir = await realpath(c.stateDir);
-  for (const p of c.projects) {
+  for (const p of projects) {
     const rel = relative(p.root, resolve(c.stateDir));
     if (!outside(rel)) throw new Error('State must live outside tracked project roots');
   }
@@ -61,10 +81,11 @@ export async function loadConfig(path: string): Promise<Settings> {
 }
 export async function projectAt(c: Settings, cwd: string) {
   const actual = await realpath(cwd);
-  return c.projects.filter(p => {
+  const project = [...c.projects, ...(c.unavailableProjects ?? [])].filter(p => {
     const rel = relative(p.root, actual);
     return !outside(rel);
   }).sort((a, b) => b.root.length - a.root.length)[0];
+  return project && !('reason' in project) ? project : undefined;
 }
 export async function withLock<T>(c: Settings, fn: () => Promise<T>): Promise<T> {
   const path = join(c.stateDir, 'operation.lock');
@@ -75,7 +96,7 @@ export async function withLock<T>(c: Settings, fn: () => Promise<T>): Promise<T>
   try { await file.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString() })); return await fn(); }
   finally { await file.close(); await rm(path); }
 }
-export type Command = (binary: string, args: string[], options: { cwd: string; input?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; signal?: AbortSignal }) => Promise<string>;
+export type Command = (binary: string, args: string[], options: { cwd: string; input?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; signal?: AbortSignal; onStdout?: (chunk: Buffer) => void }) => Promise<string>;
 export const command: Command = (binary, args, options) => new Promise((done, fail) => {
   if (options.signal?.aborted) { fail(new Error('Command aborted before startup')); return; }
   const child = spawn(binary, args, { cwd: options.cwd, env: options.env ?? process.env, shell: false,
@@ -97,7 +118,12 @@ export const command: Command = (binary, args, options) => new Promise((done, fa
   const terminate = () => { process.exitCode = 143; stop('Command terminated'); };
   process.once('SIGINT', interrupt); process.once('SIGTERM', terminate);
   const timer = setTimeout(() => stop(`Command timed out: ${binary}`), options.timeoutMs ?? 120000);
-  child.stdout.on('data', chunk => { bytes += chunk.length; if (bytes > 2 * 1024 * 1024) stop('Command output exceeded limit'); else output.push(Buffer.from(chunk)); });
+  child.stdout.on('data', chunk => {
+    if (failure) return;
+    if (options.onStdout) {
+      try { options.onStdout(Buffer.from(chunk)); } catch { stop('Command stream could not be validated'); }
+    } else { bytes += chunk.length; if (bytes > MAX_JSON_BYTES) stop('Command output exceeded limit'); else output.push(Buffer.from(chunk)); }
+  });
   child.stderr.on('data', chunk => { bytes += chunk.length; if (bytes > 2 * 1024 * 1024) stop('Command output exceeded limit'); });
   child.on('error', e => { failure = e; });
   child.stdin.on('error', () => { /* close reports subprocess failure */ });

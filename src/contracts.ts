@@ -14,7 +14,10 @@ export const Config = z.object({
   if (new Set(c.projects.map(p => p.id)).size !== c.projects.length)
     ctx.addIssue({ code: 'custom', message: 'Project IDs must be unique' });
 });
-export type Settings = z.infer<typeof Config>;
+export type Settings = z.infer<typeof Config> & {
+  // Runtime diagnostics only; never accepted as operator configuration.
+  unavailableProjects?: { id: string; root: string; reason: 'missing' | 'inaccessible' | 'not_directory' }[];
+};
 export const Evidence = z.object({
   summary: z.string().min(1).max(12000),
   source: z.string().min(1).max(2000),
